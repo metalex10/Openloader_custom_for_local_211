@@ -12,7 +12,7 @@
 # To use your custom language with OPL, simply copy your file into your mc?:/OPL folder.          #
 # (File must start with the "lang_" prefix and have the ".lng" extension)                         #
 #                                                                                                 #
-# Finally, don't put too many comments in your file, it will waste space and increases loading     #
+# Finally, don't put too many comments in your file, it will waste space and increases loading    #
 # time. One single comment line on top (e.g. "name <yourmail@address.com>") should be enough.     #
 #                                                                                                 #
 # Thanks for your work.                                                                           #
@@ -20,7 +20,7 @@
 ###################################################################################################
 #
 # Put here the English name of your language (will be displayed in the OPL Settings menu), in standard latin characters.
-English
+English template
 Open PS2 Loader %s
 Save changes
 Back
@@ -53,7 +53,7 @@ Cancel updating?
 %d: DHCP server unavailable
 %d: No network connection
 On
-Off
+Off 
 OK
 Select
 Cancel
@@ -85,7 +85,7 @@ Refresh
 USB device start mode
 HDD device start mode
 ETH device start mode
-Applications start mode
+Applications menu display mode
 Auto
 Manual
 Start HDL Server
@@ -131,7 +131,7 @@ Leave empty for GUEST auth.
 Accurate Reads
 Synchronous Mode
 Unhook Syscalls
-Skip Videos
+Skip videos
 Emulate DVD-DL
 Disable IGR
 High module storage
@@ -151,7 +151,7 @@ Progress
 VMC file exist
 Invalid VMC file, size is incorrect
 VMC file need to be created
-Error with VMC %s, continue with physical MC (slot %d) ?
+Error accessing VMC %s. Continue with the Memory Card in slot %d?
 Automatic refresh
 About
 Coders
@@ -164,7 +164,7 @@ Video mode
 Dialog color
 Selected color
 Display info page
-Info
+Info 
 Custom ELF
 Color selection
 Reconnect
@@ -180,13 +180,13 @@ Game ID
 DMA Mode
 V-Sync
 Mode 1
-Mode 2
+Mode 2 
 Mode 3
-Mode 4
+Mode 4 
 Mode 5
-Mode 6
-Mode 7
-Mode 8
+Mode 6 
+Mode 7 
+Mode 8 
 Configure GSM
 Ethernet link mode
 100Mbit full-duplex
@@ -202,11 +202,13 @@ H-POS
 Horizontal Adjustment
 V-POS
 Vertical Adjustment
+Overscan
+Overscan Adjustment
 FMV Skip
 Skips Full Motion Videos
 Cheat Settings
 Enable PS2RD Cheat Engine
-Lets PS2RD Cheat Engine patch your games
+Let PS2RD Cheat Engine patch your game
 PS2RD Cheat Engine Mode
 Auto-select or Select game cheats
 Auto-select cheats
@@ -228,3 +230,50 @@ Auto start
 Value in second(s), 0 to disable auto start
 PS2 Logo
 Only displayed for a valid disc logo which matches the console's region
+Configure PADEMU
+Pad Emulator Settings
+Enable PadEmulator
+Turns on/off PadEmulator for selected game.
+Pad Emulator mode
+Select Pad Emulator mode.
+DualShock3/4 USB
+DualShock3/4 BT
+Settings for port:
+Select Pad Emulator port for settings.
+Enable emulation
+Turns on/off Pad Emulator for selected port.
+Enable vibration
+Turns on/off vibration for Pad Emulator selected port.
+Usb bluetooth adapter mac address:
+DS Controller paired to mac address:
+Pair
+Pair DS controller
+Pair DS controller with bluetooth adapter mac address.
+Not connected
+Bluetooth adapter information
+Shows more information and supported features
+HCI Version:
+LMP Version:
+Manufacturer ID:
+Support features:
+Yes
+No
+Bluetooth adapter should be fully compatible with DS3/DS4 controllers.
+Bluetooth adapter may not work correctly with DS3/DS4 controllers.
+Enable Multitap emulation
+Turns on/off Multitap emulation for selected game.
+Multitap emulator on port
+Select port for Multitap emulation.
+Disable workaround for fake ds3
+Some fake ds3s need workaround, this option will disable it.
+Emulate FIELD flipping
+Fix for games that glitch under progressive video modes.
+Parental Lock Settings
+Parental Lock Password
+Leave blank to disable the parental lock.
+Enter Parental Lock Password
+Parental lock password incorrect.
+Parental lock disabled.
+Build Options:
+Error - this password cannot be used.
+VMC %s file is fragmented. Continue with Memory Card in slot %d?

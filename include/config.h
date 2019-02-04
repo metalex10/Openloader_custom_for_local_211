@@ -41,10 +41,14 @@ enum CONFIG_INDEX {
 #define CONFIG_ITEM_GSMVMODE "$GSMVMode"
 #define CONFIG_ITEM_GSMXOFFSET "$GSMXOffset"
 #define CONFIG_ITEM_GSMYOFFSET "$GSMYOffset"
+#define CONFIG_ITEM_GSMFIELDFIX "$GSMFIELDFix"
 
 //Per-Game CHEAT keys. -Bat-
 #define CONFIG_ITEM_ENABLECHEAT "$EnableCheat"
 #define CONFIG_ITEM_CHEATMODE "$CheatMode"
+
+#define CONFIG_ITEM_ENABLEPADEMU "$EnablePadEmu"
+#define CONFIG_ITEM_PADEMUSETTINGS "$PadEmuSettings"
 
 //OPL config keys
 #define CONFIG_OPL_THEME "theme"
@@ -58,8 +62,12 @@ enum CONFIG_INDEX {
 #define CONFIG_OPL_ENABLE_COVERART "enable_coverart"
 #define CONFIG_OPL_WIDESCREEN "wide_screen"
 #define CONFIG_OPL_VMODE "vmode"
+#define CONFIG_OPL_XOFF "xoff"
+#define CONFIG_OPL_YOFF "yoff"
+#define CONFIG_OPL_OVERSCAN "overscan"
 #define CONFIG_OPL_DISABLE_DEBUG "disable_debug"
 #define CONFIG_OPL_PS2LOGO "ps2logo"
+#define CONFIG_OPL_HDD_GAME_LIST_CACHE "hdd_game_list_cache"
 #define CONFIG_OPL_EXIT_PATH "exit_path"
 #define CONFIG_OPL_AUTO_SORT "autosort"
 #define CONFIG_OPL_AUTO_REFRESH "autorefresh"
@@ -76,6 +84,11 @@ enum CONFIG_INDEX {
 #define CONFIG_OPL_ETH_MODE "eth_mode"
 #define CONFIG_OPL_APP_MODE "app_mode"
 #define CONFIG_OPL_SWAP_SEL_BUTTON "swap_select_btn"
+#define CONFIG_OPL_PARENTAL_LOCK_PWD "parental_lock_password"
+#define CONFIG_OPL_SFX "enable_sfx"
+#define CONFIG_OPL_BOOT_SND "enable_boot_snd"
+#define CONFIG_OPL_SFX_VOLUME "sfx_volume"
+#define CONFIG_OPL_BOOT_SND_VOLUME "boot_snd_volume"
 
 //Network config keys
 #define CONFIG_NET_ETH_LINKM "eth_linkmode"
@@ -115,6 +128,8 @@ typedef struct
 } config_set_t;
 
 void configInit(char *prefix);
+void configSetMove(char *prefix);
+void configMove(config_set_t *configSet, const char *fileName);
 void configEnd();
 config_set_t *configAlloc(int type, config_set_t *configSet, char *fileName);
 void configFree(config_set_t *configSet);
@@ -129,7 +144,6 @@ int configGetColor(config_set_t *configSet, const char *key, unsigned char *colo
 int configRemoveKey(config_set_t *configSet, const char *key);
 void configMerge(config_set_t *dest, const config_set_t *source);
 
-int configReadLegacyIP(void);
 void configGetDiscIDBinary(config_set_t *configSet, void *dst);
 
 int configRead(config_set_t *configSet);
@@ -140,10 +154,8 @@ int configWriteMulti(int types);
 int configGetStat(config_set_t *configSet, iox_stat_t *stat);
 void configClear(config_set_t *configSet);
 
-#ifdef VMC
 void configGetVMC(config_set_t *configSet, char *vmc, int length, int slot);
 void configSetVMC(config_set_t *configSet, const char *vmc, int slot);
 void configRemoveVMC(config_set_t *configSet, int slot);
-#endif
 
 #endif

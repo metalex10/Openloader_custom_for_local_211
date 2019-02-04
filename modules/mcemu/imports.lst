@@ -13,10 +13,12 @@ I_GetLoadcoreInternalData
 I_QueryLibraryEntryTable
 I_FlushIcache
 I_FlushDcache
+I_ReleaseLibraryEntries
 loadcore_IMPORTS_end
 
 oplutils_IMPORTS_start
 I_getModInfo
+I_oplRegisterShutdownCallback
 #ifdef USB_DRIVER
 I_mass_stor_readSector
 I_mass_stor_writeSector
@@ -28,6 +30,7 @@ I_ata_device_sector_io
 I_smb_OpenAndX
 I_smb_ReadFile
 I_smb_WriteFile
+I_smb_Close
 #endif
 oplutils_IMPORTS_end
 
@@ -64,7 +67,6 @@ sysclib_IMPORTS_end
 sysmem_IMPORTS_start
 I_AllocSysMemory
 I_FreeSysMemory
-I_Kprintf_set
 sysmem_IMPORTS_end
 
 thbase_IMPORTS_start

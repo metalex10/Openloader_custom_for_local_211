@@ -1,5 +1,5 @@
 # Traditional Chinese translation by kane159 - kane159<kane12369@gmail.com
-# For Open PS2 Loader 0.9.3 betas - Official OPL Beta thread @http://psx-scene.com/forums/f150/open-ps2-loader-official-beta-revisions-releases-156209/
+# For Open PS2 Loader 0.9.3+ betas - Official OPL Beta thread @http://psx-scene.com/forums/f150/open-ps2-loader-official-beta-revisions-releases-156209/
 Traditional Chinese
 Open PS2 Loader %s
 保存設置
@@ -111,7 +111,7 @@ GUEST驗證留空.
 精確讀取
 同步模式
 脫開系統調用
-跳过视频
+Skip videos
 模擬 DVD-DL
 禁用 IGR
 隱藏模式內存
@@ -131,7 +131,7 @@ GUEST驗證留空.
 VMC 檔案已存在
 無效的 VMC 檔案, 大小有誤
 需要建立VMC 檔案
-VMC %s 出錯, 繼續使用物理記憶卡嗎 (slot %d) ?
+Error accessing VMC %s. Continue with the Memory Card in slot %d?
 自動重新整理
 關於
 Coders
@@ -182,6 +182,8 @@ H-POS
 水平調整
 V-POS
 垂直調整
+Overscan
+Overscan Adjustment
 跳過 FMV
 跳過全動態視頻
 金手指設置
@@ -208,3 +210,50 @@ PS2RD 金手指引擎模式
 以秒為單位,設為 0 來禁用自動啟動
 PS2 Logo
 Only displayed for a valid disc logo which matches the console's region
+Configure PADEMU
+Pad Emulator Settings
+Enable PadEmulator
+Turns on/off PadEmulator for selected game.
+Pad Emulator mode
+Select Pad Emulator mode.
+DualShock3/4 USB
+DualShock3/4 BT
+Settings for port:
+Select Pad Emulator port for settings.
+Enable emulation
+Turns on/off Pad Emulator for selected port.
+Enable vibration
+Turns on/off vibration for Pad Emulator selected port.
+Usb bluetooth adapter mac address:
+DS Controller paired to mac address:
+Pair
+Pair DS controller
+Pair DS controller with bluetooth adapter mac address.
+Not connected
+Bluetooth adapter information
+Shows more information and supported features
+HCI Version:
+LMP Version:
+Manufacturer ID:
+Support features:
+Yes
+No
+Bluetooth adapter should be fully compatible with DS3/DS4 controllers.
+Bluetooth adapter may not work correctly with DS3/DS4 controllers.
+Enable Multitap emulation
+Turns on/off Multitap emulation for selected game.
+Multitap emulator on port
+Select port for Multitap emulation.
+Disable workaround for fake ds3
+Some fake ds3s need workaround, this option will disable it.
+Emulate FIELD flipping
+Fix for games that glitch under progressive video modes.
+Parental Lock Settings
+Parental Lock Password
+Leave blank to disable the parental lock.
+Enter Parental Lock Password
+Parental lock password incorrect.
+Parental lock disabled.
+Build Options:
+Error - this password cannot be used.
+VMC %s file is fragmented. Continue with Memory Card in slot %d?

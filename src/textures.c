@@ -37,8 +37,7 @@ extern void *logo_png;
 extern void *bg_overlay_png;
 
 // Not related to screen size, just to limit at some point
-static int maxWidth = 720;
-static int maxHeight = 512;
+static int maxSize = 720*512*4;
 
 typedef struct
 {
@@ -98,6 +97,17 @@ static void texUpdate(GSTEXTURE *texture, int width, int height)
     texture->Height = height;
 }
 
+static int texSizeValidate(int width, int height, short psm)
+{
+    if (width > 1024 || height > 1024)
+        return -1;
+
+    if (gsKit_texture_size(width, height, psm) > maxSize)
+        return -1;
+
+    return 0;
+}
+
 void texPrepare(GSTEXTURE *texture, short psm)
 {
     texture->PSM = psm;
@@ -112,11 +122,15 @@ void texPrepare(GSTEXTURE *texture, short psm)
 
 int texDiscoverLoad(GSTEXTURE *texture, const char *path, int texId, short psm)
 {
-    int rc = texPngLoad(texture, path, texId, psm);
-    if (rc >= 0)
+    if (texPngLoad(texture, path, texId, psm) >= 0)
         return 0;
-    else if (psm == GS_PSM_CT24)
-        return texJpgLoad(texture, path, texId, psm);
+
+    if ((psm == GS_PSM_CT24) && texJpgLoad(texture, path, texId, psm) >= 0)
+        return 0;
+
+    if (texBmpLoad(texture, path, texId, psm) >= 0)
+        return 0;
+
     return ERR_BAD_FILE;
 }
 
@@ -259,9 +273,23 @@ int texPngLoad(GSTEXTURE *texture, const char *path, int texId, short psm)
     png_uint_32 pngWidth, pngHeight;
     int bitDepth, colorType, interlaceType;
     png_get_IHDR(pngPtr, infoPtr, &pngWidth, &pngHeight, &bitDepth, &colorType, &interlaceType, NULL, NULL);
-    if (pngWidth > maxWidth || pngHeight > maxHeight)
+    if (texSizeValidate(pngWidth, pngHeight, psm) < 0)
         return texPngEnd(pngPtr, infoPtr, file, ERR_BAD_DIMENSION);
     texUpdate(texture, pngWidth, pngHeight);
+
+    png_set_strip_16(pngPtr);
+
+    if (colorType == PNG_COLOR_TYPE_PALETTE)
+        png_set_expand(pngPtr);
+
+    if (colorType == PNG_COLOR_TYPE_GRAY && bitDepth < 8)
+        png_set_expand(pngPtr);
+
+    if (png_get_valid(pngPtr, infoPtr, PNG_INFO_tRNS))
+        png_set_tRNS_to_alpha(pngPtr);
+
+    png_set_filler(pngPtr, 0xff, PNG_FILLER_AFTER);
+    png_read_update_info(pngPtr, infoPtr);
 
     void (*texPngReadPixels)(GSTEXTURE * texture, png_bytep * rowPointers);
     switch (png_get_color_type(pngPtr, infoPtr)) {
@@ -280,19 +308,6 @@ int texPngLoad(GSTEXTURE *texture, const char *path, int texId, short psm)
             return texPngEnd(pngPtr, infoPtr, file, ERR_BAD_DEPTH);
     }
 
-    png_set_strip_16(pngPtr);
-
-    if (colorType == PNG_COLOR_TYPE_PALETTE)
-        png_set_expand(pngPtr);
-
-    if (colorType == PNG_COLOR_TYPE_GRAY && bitDepth < 8)
-        png_set_expand(pngPtr);
-
-    if (png_get_valid(pngPtr, infoPtr, PNG_INFO_tRNS))
-        png_set_tRNS_to_alpha(pngPtr);
-
-    png_set_filler(pngPtr, 0xff, PNG_FILLER_AFTER);
-    png_read_update_info(pngPtr, infoPtr);
     texPngReadData(texture, pngPtr, infoPtr, texPngReadPixels);
 
     return texPngEnd(pngPtr, infoPtr, file, 0);
@@ -317,7 +332,7 @@ int texJpgLoad(GSTEXTURE *texture, const char *path, int texId, short psm)
     if (file) {
         jpg = jpgOpenFILE(file, JPG_NORMAL);
         if (jpg != NULL) {
-            if (jpg->width > maxWidth || jpg->height > maxHeight)
+            if (texSizeValidate(jpg->width, jpg->height, psm) < 0)
                 return ERR_BAD_DIMENSION;
 
             size_t size = gsKit_texture_size_ee(jpg->width, jpg->height, psm);
@@ -343,4 +358,40 @@ int texJpgLoad(GSTEXTURE *texture, const char *path, int texId, short psm)
         fclose(file);
 
     return result;
+}
+
+
+/// BMP SUPPORT ///////////////////////////////////////////////////////////////////////////////////////
+
+extern GSGLOBAL *gsGlobal;
+int texBmpLoad(GSTEXTURE *texture, const char *path, int texId, short psm)
+{
+    texPrepare(texture, GS_PSM_CT24);
+    char filePath[256];
+
+    if (texId != -1)
+        snprintf(filePath, sizeof(filePath), "%s%s.bmp", path, internalDefault[texId].name);
+    else
+        snprintf(filePath, sizeof(filePath), "%s.bmp", path);
+
+    texture->Delayed = 1;
+    if (gsKit_texture_bmp(gsGlobal, texture, filePath) < 0)
+        return ERR_BAD_FILE;
+
+    texture->Filter = GS_FILTER_LINEAR;
+
+    if (texSizeValidate(texture->Width, texture->Height, texture->PSM) < 0) {
+        if (texture->Mem) {
+            free(texture->Mem);
+            texture->Mem = NULL;
+        }
+        if (texture->Clut) {
+            free(texture->Clut);
+            texture->Clut = NULL;
+        }
+
+        return ERR_BAD_DIMENSION;
+    }
+
+    return 0;
 }

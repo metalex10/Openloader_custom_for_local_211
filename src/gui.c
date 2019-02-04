@@ -18,13 +18,18 @@
 #include "include/system.h"
 #include "include/ethsupport.h"
 #include "include/compatupd.h"
-#ifdef GSM
 #include "include/pggsm.h"
-#endif
-#ifdef CHEAT
-#include "include/pgcht.h"
+#include "include/cheatman.h"
+
+#include "include/sound.h"
+#include <audsrv.h>
+
+#ifdef PADEMU
+#include <libds34bt.h>
+#include <libds34usb.h>
 #endif
 
+#include <limits.h>
 #include <stdlib.h>
 #include <libvux.h>
 
@@ -43,7 +48,6 @@ static s32 gGUILockSemaId;
 static ee_sema_t gQueueSema;
 
 static int screenWidth;
-static float wideScreenScale;
 static int screenHeight;
 
 // forward decl.
@@ -59,7 +63,9 @@ static void guiShow();
 static u32 curtime = 0;
 static u32 time_since_last = 0;
 static u32 time_render = 0;
+static float fps = 0.0f;
 
+extern GSGLOBAL *gsGlobal;
 #endif
 
 struct gui_update_list_t
@@ -139,8 +145,6 @@ void guiInit(void)
     gBackgroundTex.VramClut = 0;
     gBackgroundTex.Clut = NULL;
 
-    wideScreenScale = 1.0f;
-
     // Precalculate the values for the perlin noise plasma
     int i;
     for (i = 0; i < 256; ++i) {
@@ -189,51 +193,45 @@ void guiStartFrame(void)
 
 void guiEndFrame(void)
 {
-    guiUnlock();
-    rmFlush();
-
 #ifdef __DEBUG
     u32 newtime = cpu_ticks() / CLOCKS_PER_MILISEC;
     time_render = newtime - curtime;
 #endif
 
     rmEndFrame();
+    guiUnlock();
 }
 
 void guiShowAbout()
 {
-    char OPLVersion[64];
+    char OPLVersion[40];
+    char OPLBuildDetails[40];
 
-    // TODO: Move it into a new variable
-    // If you use VMC + RTL + GSM + IGS + PS2RD, you not will see last chars
-    // in the new version scheme because look like this now
-    // "Open PS2 Loader 0.9.4.9XY-abcdefg"
+    toggleSfx = -1;
     snprintf(OPLVersion, sizeof(OPLVersion), _l(_STR_OPL_VER), OPL_VERSION);
+    diaSetLabel(diaAbout, ABOUT_TITLE, OPLVersion);
 
-#ifdef VMC
-    strcat(OPLVersion, " VMC");
-#endif
+    snprintf(OPLBuildDetails, sizeof(OPLBuildDetails), ""
 #ifdef __RTL
-    strcat(OPLVersion, " RTL");
+        " RTL"
 #endif
-#ifdef __CHILDPROOF
-    strcat(OPLVersion, " CHILDPROOF");
-#endif
-#ifdef GSM
-    strcat(OPLVersion, " GSM");
-    strcat(OPLVersion, GSM_VERSION);
-#endif
+        " GSM %s"
 #ifdef IGS
-    strcat(OPLVersion, " IGS");
-    strcat(OPLVersion, IGS_VERSION);
+        " IGS %s"
 #endif
-#ifdef CHEAT
-    strcat(OPLVersion, " PS2RD");
+#ifdef PADEMU
+        " PADEMU"
 #endif
-
-    diaSetLabel(diaAbout, 1, OPLVersion);
+        //Version numbers
+        , GSM_VERSION
+#ifdef IGS
+        , IGS_VERSION
+#endif
+    );
+    diaSetLabel(diaAbout, ABOUT_BUILD_DETAILS, OPLBuildDetails);
 
     diaExecuteDialog(diaAbout, -1, 1, NULL);
+    toggleSfx = 0;
 }
 
 static int guiNetCompatUpdRefresh(int modified)
@@ -385,6 +383,7 @@ void guiShowConfig()
 
     diaSetInt(diaConfig, CFG_DEBUG, gDisableDebug);
     diaSetInt(diaConfig, CFG_PS2LOGO, gPS2Logo);
+    diaSetInt(diaConfig, CFG_HDDGAMELISTCACHE, gHDDGameListCache);
     diaSetString(diaConfig, CFG_EXITTO, gExitPath);
     diaSetInt(diaConfig, CFG_ENWRITEOP, gEnableWrite);
     diaSetInt(diaConfig, CFG_HDDSPINDOWN, gHDDSpindown);
@@ -407,6 +406,7 @@ void guiShowConfig()
     if (ret) {
         diaGetInt(diaConfig, CFG_DEBUG, &gDisableDebug);
         diaGetInt(diaConfig, CFG_PS2LOGO, &gPS2Logo);
+        diaGetInt(diaConfig, CFG_HDDGAMELISTCACHE, &gHDDGameListCache);
         diaGetString(diaConfig, CFG_EXITTO, gExitPath, sizeof(gExitPath));
         diaGetInt(diaConfig, CFG_ENWRITEOP, &gEnableWrite);
         diaGetInt(diaConfig, CFG_HDDSPINDOWN, &gHDDSpindown);
@@ -435,7 +435,7 @@ static int curTheme = -1;
 static int guiUIUpdater(int modified)
 {
     if (modified) {
-        int temp;
+        int temp, x, y;
         diaGetInt(diaUIConfig, UICFG_THEME, &temp);
         if (temp != curTheme) {
             curTheme = temp;
@@ -474,6 +474,26 @@ static int guiUIUpdater(int modified)
             diaSetEnabled(diaUIConfig, UICFG_TXTCOL, temp);
             diaSetEnabled(diaUIConfig, UICFG_SELCOL, temp);
         }
+
+        diaGetInt(diaUIConfig, UICFG_XOFF, &x);
+        diaGetInt(diaUIConfig, UICFG_YOFF, &y);
+        if ((x != gXOff) || (y != gYOff)) {
+            gXOff = x;
+            gYOff = y;
+            rmSetDisplayOffset(x, y);
+        }
+        diaGetInt(diaUIConfig, UICFG_OVERSCAN, &temp);
+        if (temp != gOverscan) {
+            gOverscan = temp;
+            rmSetOverscan(gOverscan);
+            guiUpdateScreenScale();
+        }
+        diaGetInt(diaUIConfig, UICFG_WIDESCREEN, &temp);
+        if (temp != gWideScreen) {
+            gWideScreen = temp;
+            rmSetAspectRatio((gWideScreen == 0) ? RM_ARATIO_4_3 : RM_ARATIO_16_9);
+            guiUpdateScreenScale();
+        }
     }
 
     return 0;
@@ -485,9 +505,23 @@ void guiShowUIConfig(void)
 
     // configure the enumerations
     const char *scrollSpeeds[] = {_l(_STR_SLOW), _l(_STR_MEDIUM), _l(_STR_FAST), NULL};
-    const char *vmodeNames[] = {_l(_STR_AUTO), "PAL", "NTSC", "HDTV 480p @60Hz", "HDTV 576p @50Hz",
-                                "VGA 640x480p @60Hz", NULL};
+    const char *vmodeNames[] = {_l(_STR_AUTO)
+        , "PAL 640x512i @50Hz 24bit"
+        , "NTSC 640x448i @60Hz 24bit"
+        , "EDTV 640x448p @60Hz 24bit"
+        , "EDTV 640x512p @50Hz 24bit"
+        , "VGA 640x480p @60Hz 24bit"
+        , "PAL 704x576i @50Hz 24bit (HIRES)"
+        , "NTSC 704x480i @60Hz 24bit (HIRES)"
+        , "EDTV 704x480p @60Hz 24bit (HIRES)"
+        , "EDTV 704x576p @50Hz 24bit (HIRES)"
+        , "HDTV 1280x720p @60Hz 16bit (HIRES)"
+        , "HDTV 1920x1080i @60Hz 16bit (HIRES)"
+        , NULL};
+    int previousVMode;
 
+reselect_video_mode:
+    previousVMode = gVMode;
     diaSetEnum(diaUIConfig, UICFG_SCROLL, scrollSpeeds);
     diaSetEnum(diaUIConfig, UICFG_THEME, (const char **)thmGetGuiList());
     diaSetEnum(diaUIConfig, UICFG_LANG, (const char **)lngGetGuiList());
@@ -495,13 +529,16 @@ void guiShowUIConfig(void)
     diaSetInt(diaUIConfig, UICFG_SCROLL, gScrollSpeed);
     diaSetInt(diaUIConfig, UICFG_THEME, thmGetGuiValue());
     diaSetInt(diaUIConfig, UICFG_LANG, lngGetGuiValue());
-    guiUIUpdater(1);
     diaSetInt(diaUIConfig, UICFG_AUTOSORT, gAutosort);
     diaSetInt(diaUIConfig, UICFG_AUTOREFRESH, gAutoRefresh);
     diaSetInt(diaUIConfig, UICFG_INFOPAGE, gUseInfoScreen);
     diaSetInt(diaUIConfig, UICFG_COVERART, gEnableArt);
     diaSetInt(diaUIConfig, UICFG_WIDESCREEN, gWideScreen);
     diaSetInt(diaUIConfig, UICFG_VMODE, gVMode);
+    diaSetInt(diaUIConfig, UICFG_XOFF, gXOff);
+    diaSetInt(diaUIConfig, UICFG_YOFF, gYOff);
+    diaSetInt(diaUIConfig, UICFG_OVERSCAN, gOverscan);
+    guiUIUpdater(1);
 
     int ret = diaExecuteDialog(diaUIConfig, -1, 1, guiUIUpdater);
     if (ret) {
@@ -521,12 +558,26 @@ void guiShowUIConfig(void)
         diaGetInt(diaUIConfig, UICFG_COVERART, &gEnableArt);
         diaGetInt(diaUIConfig, UICFG_WIDESCREEN, &gWideScreen);
         diaGetInt(diaUIConfig, UICFG_VMODE, &gVMode);
+        diaGetInt(diaUIConfig, UICFG_XOFF, &gXOff);
+        diaGetInt(diaUIConfig, UICFG_YOFF, &gYOff);
+        diaGetInt(diaUIConfig, UICFG_OVERSCAN, &gOverscan);
 
         applyConfig(themeID, langID);
+        //wait 70ms for confirm sound to finish playing before clearing buffer
+        guiDelay(0070);
+        sfxInit(0);
+    }
+
+    if (previousVMode != gVMode) {
+        if (guiConfirmVideoMode() == 0) {
+            //Restore previous video mode, without changing the theme & language settings.
+            gVMode = previousVMode;
+            applyConfig(-1, -1);
+            goto reselect_video_mode;
+        }
     }
 }
 
-#ifdef GSM
 static void guiSetGSMSettingsState(void)
 {
     int isGSMEnabled;
@@ -535,6 +586,7 @@ static void guiSetGSMSettingsState(void)
     diaSetEnabled(diaGSConfig, GSMCFG_GSMVMODE, isGSMEnabled);
     diaSetEnabled(diaGSConfig, GSMCFG_GSMXOFFSET, isGSMEnabled);
     diaSetEnabled(diaGSConfig, GSMCFG_GSMYOFFSET, isGSMEnabled);
+    diaSetEnabled(diaGSConfig, GSMCFG_GSMFIELDFIX, isGSMEnabled);
 }
 
 static int guiGSMUpdater(int modified)
@@ -563,7 +615,6 @@ static void guiShowGSConfig(void)
         "HDTV 720p @60Hz",
         "HDTV 1080i @60Hz",
         "HDTV 1080i @60Hz Non Interlaced",
-        "HDTV 1080p @60Hz",
         "VGA 640x480p @60Hz",
         "VGA 640x480p @72Hz",
         "VGA 640x480p @75Hz",
@@ -586,9 +637,6 @@ static void guiShowGSConfig(void)
     diaExecuteDialog(diaGSConfig, -1, 1, &guiGSMUpdater);
 }
 
-#endif
-
-#ifdef CHEAT
 static void guiSetCheatSettingsState(void)
 {
     int isCheatEnabled;
@@ -614,6 +662,297 @@ void guiShowCheatConfig(void)
     diaSetEnum(diaCheatConfig, CHTCFG_CHEATMODE, cheatmodeNames);
 
     diaExecuteDialog(diaCheatConfig, -1, 1, &guiCheatUpdater);
+}
+
+#ifdef PADEMU
+
+//from https://www.bluetooth.com/specifications/assigned-numbers/host-controller-interface
+static char *bt_ver_str[] = {
+    "1.0b",
+    "1.1",
+    "1.2",
+    "2.0 + EDR",
+    "2.1 + EDR",
+    "3.0 + HS",
+    "4.0",
+    "4.1",
+    "4.2",
+    "5.0",
+};
+
+static const char *PadEmuPorts_enums[][5] = {
+    {"1P", "2P", NULL, NULL, NULL},
+    {"1A", "1B", "1C", "1D", NULL},
+    {"2A", "2B", "2C", "2D", NULL},
+};
+
+static u8 ds3_mac[6];
+static u8 dg_mac[6];
+static char ds3_str[18];
+static char dg_str[18];
+static char vid_str[4];
+static char pid_str[4];
+static char rev_str[4];
+static char hci_str[26];
+static char lmp_str[26];
+static char man_str[4];
+static int ds3macset = 0;
+static int dgmacset = 0;
+static int dg_discon = 0;
+static int ver_set = 0, feat_set = 0;
+static int PadEmuSettings = 0;
+
+static char *bdaddr_to_str(u8 *bdaddr, char *addstr)
+{
+    int i;
+
+    memset(addstr, 0, sizeof(addstr));
+
+    for (i = 0; i < 6; i++) {
+        sprintf(addstr, "%s%02X", addstr, bdaddr[i]);
+
+        if (i < 5)
+            sprintf(addstr, "%s:", addstr);
+    }
+
+    return addstr;
+}
+
+static char *hex_to_str(u8 *str, u16 hex)
+{
+    sprintf(str, "%04X", hex);
+
+    return str;
+}
+
+static char *ver_to_str(u8 *str, u8 ma, u16 mi)
+{
+    if (ma > 9)
+        ma = 0;
+
+    sprintf(str, "%X.%04X    BT %s", ma, mi, bt_ver_str[ma]);
+
+    return str;
+}
+
+static int guiPadEmuUpdater(int modified)
+{
+    int PadEmuEnable, PadEmuMode, PadPort, PadEmuVib, PadEmuPort, PadEmuMtap, PadEmuMtapPort, PadEmuWorkaround;
+    static int oldPadPort;
+
+    diaGetInt(diaPadEmuConfig, PADCFG_PADEMU_ENABLE, &PadEmuEnable);
+    diaGetInt(diaPadEmuConfig, PADCFG_PADEMU_MODE, &PadEmuMode);
+    diaGetInt(diaPadEmuConfig, PADCFG_PADPORT, &PadPort);
+    diaGetInt(diaPadEmuConfig, PADCFG_PADEMU_PORT, &PadEmuPort);
+    diaGetInt(diaPadEmuConfig, PADCFG_PADEMU_VIB, &PadEmuVib);
+
+    diaGetInt(diaPadEmuConfig, PADCFG_PADEMU_MTAP, &PadEmuMtap);
+    diaGetInt(diaPadEmuConfig, PADCFG_PADEMU_MTAP_PORT, &PadEmuMtapPort);
+    diaGetInt(diaPadEmuConfig, PADCFG_PADEMU_WORKAROUND, &PadEmuWorkaround);
+
+    diaSetEnabled(diaPadEmuConfig, PADCFG_PADEMU_MTAP, PadEmuEnable);
+    diaSetEnabled(diaPadEmuConfig, PADCFG_PADEMU_MTAP_PORT, PadEmuMtap);
+
+    diaSetEnabled(diaPadEmuConfig, PADCFG_PADEMU_MODE, PadEmuEnable);
+
+    diaSetEnabled(diaPadEmuConfig, PADCFG_PADPORT, PadEmuEnable);
+    diaSetEnabled(diaPadEmuConfig, PADCFG_PADEMU_VIB, PadEmuPort & PadEmuEnable);
+
+    diaSetVisible(diaPadEmuConfig, PADCFG_USBDG_MAC, PadEmuMode & PadEmuEnable);
+    diaSetVisible(diaPadEmuConfig, PADCFG_PAD_MAC, PadEmuMode & PadEmuEnable);
+    diaSetVisible(diaPadEmuConfig, PADCFG_PAIR, PadEmuMode & PadEmuEnable);
+
+    diaSetVisible(diaPadEmuConfig, PADCFG_USBDG_MAC_STR, PadEmuMode & PadEmuEnable);
+    diaSetVisible(diaPadEmuConfig, PADCFG_PAD_MAC_STR, PadEmuMode & PadEmuEnable);
+    diaSetVisible(diaPadEmuConfig, PADCFG_PAIR_STR, PadEmuMode & PadEmuEnable);
+
+    diaSetVisible(diaPadEmuConfig, PADCFG_BTINFO, PadEmuMode & PadEmuEnable);
+    diaSetVisible(diaPadEmuConfig, PADCFG_PADEMU_WORKAROUND, PadEmuMode & PadEmuEnable);
+    diaSetVisible(diaPadEmuConfig, PADCFG_PADEMU_WORKAROUND_STR, PadEmuMode & PadEmuEnable);
+
+    if (modified) {
+        if (PadEmuMtap) {
+            diaSetEnum(diaPadEmuConfig, PADCFG_PADPORT, PadEmuPorts_enums[PadEmuMtapPort]);
+            diaSetEnabled(diaPadEmuConfig, PADCFG_PADEMU_PORT, (PadPort == 0) & PadEmuEnable);
+            PadEmuSettings |= 0x00000E00;
+        } else {
+            diaSetEnum(diaPadEmuConfig, PADCFG_PADPORT, PadEmuPorts_enums[0]);
+            diaSetEnabled(diaPadEmuConfig, PADCFG_PADEMU_PORT, PadEmuEnable);
+            PadEmuSettings &= 0xFFFF03FF;
+            if (PadPort > 1) {
+                PadPort = 0;
+                diaSetInt(diaPadEmuConfig, PADCFG_PADPORT, PadPort);
+            }
+        }
+
+        if (PadPort != oldPadPort) {
+            diaSetInt(diaPadEmuConfig, PADCFG_PADEMU_PORT, (PadEmuSettings >> (8 + PadPort)) & 1);
+            diaSetInt(diaPadEmuConfig, PADCFG_PADEMU_VIB, (PadEmuSettings >> (16 + PadPort)) & 1);
+
+            oldPadPort = PadPort;
+        }
+    }
+
+    PadEmuSettings |= PadEmuMode | (PadEmuPort << (8 + PadPort)) | (PadEmuVib << (16 + PadPort)) | (PadEmuMtap << 24) | ((PadEmuMtapPort - 1) << 25) | (PadEmuWorkaround << 26);
+    PadEmuSettings &= (~(!PadEmuMode) & ~(!PadEmuPort << (8 + PadPort)) & ~(!PadEmuVib << (16 + PadPort)) & ~(!PadEmuMtap << 24) & ~(!(PadEmuMtapPort - 1) << 25) & ~(!PadEmuWorkaround << 26));
+
+    if (PadEmuMode) {
+        if (ds34bt_get_status(0) & DS34BT_STATE_USB_CONFIGURED) {
+            if (dg_discon) {
+                dgmacset = 0;
+                dg_discon = 0;
+            }
+            if (!dgmacset) {
+                if (ds34bt_get_bdaddr(dg_mac)) {
+                    dgmacset = 1;
+                    diaSetLabel(diaPadEmuConfig, PADCFG_USBDG_MAC, bdaddr_to_str(dg_mac, dg_str));
+                } else {
+                    dgmacset = 0;
+                }
+            }
+        } else {
+            dg_discon = 1;
+        }
+
+        if (!dgmacset) {
+            diaSetLabel(diaPadEmuConfig, PADCFG_USBDG_MAC, _l(_STR_NOT_CONNECTED));
+        }
+
+        if (ds34usb_get_status(0) & DS34USB_STATE_RUNNING) {
+            if (!ds3macset) {
+                if (ds34usb_get_bdaddr(0, ds3_mac)) {
+                    ds3macset = 1;
+                    diaSetLabel(diaPadEmuConfig, PADCFG_PAD_MAC, bdaddr_to_str(ds3_mac, ds3_str));
+                } else {
+                    ds3macset = 0;
+                }
+            }
+        } else {
+            diaSetLabel(diaPadEmuConfig, PADCFG_PAD_MAC, _l(_STR_NOT_CONNECTED));
+            ds3macset = 0;
+        }
+    }
+
+    return 0;
+}
+
+static int guiPadEmuInfoUpdater(int modified)
+{
+    hci_information_t info;
+    u8 feat[8];
+    int i, j;
+    u8 data;
+    int supported;
+
+    if (ds34bt_get_status(0) & DS34BT_STATE_USB_CONFIGURED) {
+        if (!ver_set) {
+            if (ds34bt_get_version(&info)) {
+                ver_set = 1;
+                diaSetLabel(diaPadEmuInfo, PADCFG_VID, hex_to_str(vid_str, info.vid));
+                diaSetLabel(diaPadEmuInfo, PADCFG_PID, hex_to_str(pid_str, info.pid));
+                diaSetLabel(diaPadEmuInfo, PADCFG_REV, hex_to_str(rev_str, info.rev));
+                diaSetLabel(diaPadEmuInfo, PADCFG_HCIVER, ver_to_str(hci_str, info.hci_ver, info.hci_rev));
+                diaSetLabel(diaPadEmuInfo, PADCFG_LMPVER, ver_to_str(lmp_str, info.lmp_ver, info.lmp_subver));
+                diaSetLabel(diaPadEmuInfo, PADCFG_MANID, hex_to_str(man_str, info.mf_name));
+            } else {
+                ver_set = 0;
+            }
+        }
+
+        if (!feat_set) {
+            if (ds34bt_get_features(feat)) {
+                feat_set = 1;
+                supported = 0;
+                for (i = 0, j = 0; i < 64; i++) {
+                    data = (feat[j] >> (i - j * 8)) & 1;
+                    diaSetLabel(diaPadEmuInfo, PADCFG_FEAT_START + i, _l(_STR_NO - data));
+                    j = (i + 1) / 8;
+                    if (i == 25 || i == 26 || i == 39) {
+                        if (data)
+                            supported++;
+                    }
+                }
+                if (supported == 3)
+                    diaSetLabel(diaPadEmuInfo, PADCFG_BT_SUPPORTED, _l(_STR_BT_SUPPORTED));
+                else
+                    diaSetLabel(diaPadEmuInfo, PADCFG_BT_SUPPORTED, _l(_STR_BT_NOTSUPPORTED));
+            } else {
+                feat_set = 0;
+            }
+        }
+    } else {
+        ver_set = 0;
+        feat_set = 0;
+    }
+
+    return 0;
+}
+
+static void guiShowPadEmuConfig(void)
+{
+    const char *PadEmuModes[] = {_l(_STR_DS34USB_MODE), _l(_STR_DS34BT_MODE), NULL};
+    int PadEmuMtap, PadEmuMtapPort, PadEmuEnable, i;
+
+    diaSetEnum(diaPadEmuConfig, PADCFG_PADEMU_MODE, PadEmuModes);
+
+    PadEmuMtap = (PadEmuSettings >> 24) & 1;
+    PadEmuMtapPort = ((PadEmuSettings >> 25) & 1) + 1;
+
+    diaSetInt(diaPadEmuConfig, PADCFG_PADEMU_MODE, PadEmuSettings & 0xFF);
+
+    diaSetInt(diaPadEmuConfig, PADCFG_PADPORT, 0);
+
+    diaSetInt(diaPadEmuConfig, PADCFG_PADEMU_PORT, (PadEmuSettings >> 8) & 1);
+    diaSetInt(diaPadEmuConfig, PADCFG_PADEMU_VIB, (PadEmuSettings >> 16) & 1);
+
+    diaSetInt(diaPadEmuConfig, PADCFG_PADEMU_MTAP, PadEmuMtap);
+    diaSetInt(diaPadEmuConfig, PADCFG_PADEMU_MTAP_PORT, PadEmuMtapPort);
+    diaSetInt(diaPadEmuConfig, PADCFG_PADEMU_WORKAROUND, ((PadEmuSettings >> 26) & 1));
+
+    diaGetInt(diaPadEmuConfig, PADCFG_PADEMU_ENABLE, &PadEmuEnable);
+    diaSetEnabled(diaPadEmuConfig, PADCFG_PADEMU_PORT, PadEmuEnable);
+
+    if (PadEmuMtap) {
+        diaSetEnum(diaPadEmuConfig, PADCFG_PADPORT, PadEmuPorts_enums[PadEmuMtapPort]);
+        PadEmuSettings |= 0x00000E00;
+    } else {
+        diaSetEnum(diaPadEmuConfig, PADCFG_PADPORT, PadEmuPorts_enums[0]);
+        PadEmuSettings &= 0xFFFF03FF;
+    }
+
+    int result = -1;
+
+    while (result != 0) {
+        result = diaExecuteDialog(diaPadEmuConfig, result, 1, &guiPadEmuUpdater);
+
+        if (result == PADCFG_PAIR) {
+            if (ds3macset && dgmacset) {
+                if (ds34usb_get_status(0) & DS34USB_STATE_RUNNING) {
+                    if (ds34usb_set_bdaddr(0, dg_mac))
+                        ds3macset = 0;
+                }
+            }
+        }
+
+        if (result == PADCFG_BTINFO) {
+            for (i = PADCFG_FEAT_START; i < PADCFG_FEAT_END + 1; i++)
+                diaSetLabel(diaPadEmuInfo, i, _l(_STR_NO));
+
+            diaSetLabel(diaPadEmuInfo, PADCFG_VID, _l(_STR_NOT_CONNECTED));
+            diaSetLabel(diaPadEmuInfo, PADCFG_PID, _l(_STR_NOT_CONNECTED));
+            diaSetLabel(diaPadEmuInfo, PADCFG_REV, _l(_STR_NOT_CONNECTED));
+            diaSetLabel(diaPadEmuInfo, PADCFG_HCIVER, _l(_STR_NOT_CONNECTED));
+            diaSetLabel(diaPadEmuInfo, PADCFG_LMPVER, _l(_STR_NOT_CONNECTED));
+            diaSetLabel(diaPadEmuInfo, PADCFG_MANID, _l(_STR_NOT_CONNECTED));
+            diaSetLabel(diaPadEmuInfo, PADCFG_BT_SUPPORTED, _l(_STR_NOT_CONNECTED));
+            ver_set = 0;
+            feat_set = 0;
+            diaExecuteDialog(diaPadEmuInfo, -1, 1, &guiPadEmuInfoUpdater);
+        }
+
+        if (result == UIID_BTN_OK)
+            break;
+    }
 }
 #endif
 
@@ -731,12 +1070,64 @@ void guiShowNetConfig(void)
     }
 }
 
+void guiShowParentalLockConfig(void)
+{
+    int result;
+    char password[CONFIG_KEY_VALUE_LEN];
+    config_set_t *configOPL = configGetByType(CONFIG_OPL);
+
+    // Set current values
+    configGetStrCopy(configOPL, CONFIG_OPL_PARENTAL_LOCK_PWD, password, CONFIG_KEY_VALUE_LEN); //This will return the current password, or a blank string if it is not set.
+    diaSetString(diaParentalLockConfig, CFG_PARENLOCK_PASSWORD, password);
+
+    result = diaExecuteDialog(diaParentalLockConfig, -1, 1, NULL);
+    if (result) {
+        diaGetString(diaParentalLockConfig, CFG_PARENLOCK_PASSWORD, password, CONFIG_KEY_VALUE_LEN);
+
+        if (strlen(password) > 0) {
+            if (strncmp(OPL_PARENTAL_LOCK_MASTER_PASS, password, CONFIG_KEY_VALUE_LEN) != 0) {
+                // Store password
+                configSetStr(configOPL, CONFIG_OPL_PARENTAL_LOCK_PWD, password);
+            } else {
+                // Password not acceptable (i.e. master password entered).
+                guiMsgBox(_l(_STR_PARENLOCK_INVALID_PASSWORD), 0, NULL);
+            }
+        } else {
+            configRemoveKey(configOPL, CONFIG_OPL_PARENTAL_LOCK_PWD);
+
+            guiMsgBox(_l(_STR_PARENLOCK_DISABLE_WARNING), 0, diaParentalLockConfig);
+        }
+
+        menuSetParentalLockCheckState(1);
+    }
+}
+
+void guiShowAudioConfig(void)
+{
+	int ret;
+
+    diaSetInt(diaAudioConfig, CFG_SFX, gEnableSFX);
+    diaSetInt(diaAudioConfig, CFG_BOOT_SND, gEnableBootSND);
+    diaSetInt(diaAudioConfig, CFG_SFX_VOLUME, gSFXVolume);
+    diaSetInt(diaAudioConfig, CFG_BOOT_SND_VOLUME, gBootSndVolume);
+
+    ret = diaExecuteDialog(diaAudioConfig, -1, 1, &guiUpdater);
+    if (ret) {
+        diaGetInt(diaAudioConfig, CFG_SFX, &gEnableSFX);
+        diaGetInt(diaAudioConfig, CFG_BOOT_SND, &gEnableBootSND);
+        diaGetInt(diaAudioConfig, CFG_SFX_VOLUME, &gSFXVolume);
+        diaGetInt(diaAudioConfig, CFG_BOOT_SND_VOLUME, &gBootSndVolume);
+        applyConfig(-1, -1);
+        sfxVolume();
+    }
+}
+
 int guiShowKeyboard(char *value, int maxLength)
 {
     char tmp[maxLength];
     strncpy(tmp, value, maxLength);
 
-    int result = diaShowKeyb(tmp, maxLength, 0);
+    int result = diaShowKeyb(tmp, maxLength, 0, NULL);
     if (result) {
         strncpy(value, tmp, maxLength);
         value[maxLength - 1] = '\0';
@@ -745,7 +1136,6 @@ int guiShowKeyboard(char *value, int maxLength)
     return result;
 }
 
-#ifdef VMC
 typedef struct
 {                   // size = 76
     int VMC_status; // 0=available, 1=busy
@@ -766,7 +1156,7 @@ static statusVMCparam_t vmc_status;
 
 int guiVmcNameHandler(char *text, int maxLen)
 {
-    int result = diaShowKeyb(text, maxLen, 0);
+    int result = diaShowKeyb(text, maxLen, 0, NULL);
 
     if (result)
         vmc_refresh = 1;
@@ -925,13 +1315,12 @@ static int guiShowVMCConfig(int id, item_list_t *support, char *VMCName, int slo
 
     return result;
 }
-#endif
 
 int guiAltStartupNameHandler(char *text, int maxLen)
 {
     int i;
 
-    int result = diaShowKeyb(text, maxLen, 0);
+    int result = diaShowKeyb(text, maxLen, 0, NULL);
     if (result) {
         for (i = 0; text[i]; i++) {
             if (text[i] > 96 && text[i] < 123)
@@ -975,7 +1364,6 @@ int guiShowCompatConfig(int id, item_list_t *support, config_set_t *configSet)
         diaSetInt(diaCompatConfig, COMPAT_MODE_BASE + i, (compatMode & (1 << i)) > 0 ? 1 : 0);
 
 // Begin Per-Game GSM Integration --Bat--
-#ifdef GSM
     int EnableGSM = 0;
     configGetInt(configSet, CONFIG_ITEM_ENABLEGSM, &EnableGSM);
     diaSetInt(diaGSConfig, GSMCFG_ENABLEGSM, EnableGSM);
@@ -992,11 +1380,13 @@ int guiShowCompatConfig(int id, item_list_t *support, config_set_t *configSet)
     configGetInt(configSet, CONFIG_ITEM_GSMYOFFSET, &GSMYOffset);
     diaSetInt(diaGSConfig, GSMCFG_GSMYOFFSET, GSMYOffset);
 
+    int GSMFIELDFix = 0;
+    configGetInt(configSet, CONFIG_ITEM_GSMFIELDFIX, &GSMFIELDFix);
+    diaSetInt(diaGSConfig, GSMCFG_GSMFIELDFIX, GSMFIELDFix);
+
     guiSetGSMSettingsState();
-#endif /* GSM */
 
 // Begin of Per-Game CHEAT Integration --Bat--
-#ifdef CHEAT
     int EnableCheat = 0;
     configGetInt(configSet, CONFIG_ITEM_ENABLECHEAT, &EnableCheat);
     diaSetInt(diaCheatConfig, CHTCFG_ENABLECHEAT, EnableCheat);
@@ -1007,7 +1397,15 @@ int guiShowCompatConfig(int id, item_list_t *support, config_set_t *configSet)
 
     guiSetCheatSettingsState();
 
-#endif /* CHEAT */
+#ifdef PADEMU
+    int EnablePadEmu = 0;
+    configGetInt(configSet, CONFIG_ITEM_ENABLEPADEMU, &EnablePadEmu);
+    diaSetInt(diaPadEmuConfig, PADCFG_PADEMU_ENABLE, EnablePadEmu);
+
+    PadEmuSettings = 0;
+
+    configGetInt(configSet, CONFIG_ITEM_PADEMUSETTINGS, &PadEmuSettings);
+#endif
 
     // Find out the current game ID
     char hexid[32];
@@ -1018,7 +1416,7 @@ int guiShowCompatConfig(int id, item_list_t *support, config_set_t *configSet)
     configGetStrCopy(configSet, CONFIG_ITEM_ALTSTARTUP, altStartup, sizeof(altStartup));
     diaSetString(diaCompatConfig, COMPAT_ALTSTARTUP, altStartup);
 
-#ifdef VMC
+    // VMC
     char vmc1[32];
     configGetVMC(configSet, vmc1, sizeof(vmc1), 0);
     diaSetLabel(diaCompatConfig, COMPAT_VMC1_DEFINE, vmc1);
@@ -1026,11 +1424,10 @@ int guiShowCompatConfig(int id, item_list_t *support, config_set_t *configSet)
     char vmc2[32]; // required as diaSetLabel use pointer to value
     configGetVMC(configSet, vmc2, sizeof(vmc2), 1);
     diaSetLabel(diaCompatConfig, COMPAT_VMC2_DEFINE, vmc2);
-#endif
 
     // show dialog
     do {
-#ifdef VMC
+        // VMC
         if (strlen(vmc1))
             diaSetLabel(diaCompatConfig, COMPAT_VMC1_ACTION, _l(_STR_RESET));
         else
@@ -1039,20 +1436,20 @@ int guiShowCompatConfig(int id, item_list_t *support, config_set_t *configSet)
             diaSetLabel(diaCompatConfig, COMPAT_VMC2_ACTION, _l(_STR_RESET));
         else
             diaSetLabel(diaCompatConfig, COMPAT_VMC2_ACTION, _l(_STR_USE_GENERIC));
-#endif
 
         result = diaExecuteDialog(diaCompatConfig, result, 1, NULL);
 
-#ifdef GSM
         if (result == COMPAT_GSMCONFIG) {
             guiShowGSConfig();
         }
+#ifdef PADEMU
+        if (result == COMPAT_PADEMUCONFIG) {
+            guiShowPadEmuConfig();
+        }
 #endif
-#ifdef CHEAT
         if (result == COMPAT_CHEATCONFIG) {
             guiShowCheatConfig();
         }
-#endif
 
         if (result == COMPAT_LOADFROMDISC) {
             char hexDiscID[15];
@@ -1061,48 +1458,65 @@ int guiShowCompatConfig(int id, item_list_t *support, config_set_t *configSet)
             else
                 guiMsgBox(_l(_STR_ERROR_LOADING_ID), 0, NULL);
         }
-#ifdef VMC
+        //VMC
         else if (result == COMPAT_VMC1_DEFINE) {
-            if (guiShowVMCConfig(id, support, vmc1, 0, 0))
-                diaGetString(diaVMC, VMC_NAME, vmc1, sizeof(vmc1));
+            if (menuCheckParentalLock() == 0) {
+                if (guiShowVMCConfig(id, support, vmc1, 0, 0))
+                    diaGetString(diaVMC, VMC_NAME, vmc1, sizeof(vmc1));
+            }
         } else if (result == COMPAT_VMC2_DEFINE) {
-            if (guiShowVMCConfig(id, support, vmc2, 1, 0))
-                diaGetString(diaVMC, VMC_NAME, vmc2, sizeof(vmc2));
+            if (menuCheckParentalLock() == 0) {
+                if (guiShowVMCConfig(id, support, vmc2, 1, 0))
+                    diaGetString(diaVMC, VMC_NAME, vmc2, sizeof(vmc2));
+            }
         } else if (result == COMPAT_VMC1_ACTION) {
-            if (strlen(vmc1))
-                vmc1[0] = '\0';
-            else
-                snprintf(vmc1, sizeof(vmc1), "generic_%d", 0);
+            if (menuCheckParentalLock() == 0) {
+                if (strlen(vmc1))
+                    vmc1[0] = '\0';
+                 else
+                     snprintf(vmc1, sizeof(vmc1), "generic_%d", 0);
+            }
         } else if (result == COMPAT_VMC2_ACTION) {
-            if (strlen(vmc2))
-                vmc2[0] = '\0';
-            else
-                snprintf(vmc2, sizeof(vmc2), "generic_%d", 1);
+            if (menuCheckParentalLock() == 0) {
+                if (strlen(vmc2))
+                    vmc2[0] = '\0';
+                 else
+                    snprintf(vmc2, sizeof(vmc2), "generic_%d", 1);
+            }
         }
-#endif
     } while (result >= COMPAT_NOEXIT);
 
     if (result == COMPAT_REMOVE) {
-        configRemoveKey(configSet, CONFIG_ITEM_CONFIGSOURCE);
-        configRemoveKey(configSet, CONFIG_ITEM_DMA);
-        configRemoveKey(configSet, CONFIG_ITEM_COMPAT);
-        configRemoveKey(configSet, CONFIG_ITEM_DNAS);
-        configRemoveKey(configSet, CONFIG_ITEM_ALTSTARTUP);
-#ifdef GSM
-        configRemoveKey(configSet, CONFIG_ITEM_ENABLEGSM);
-        configRemoveKey(configSet, CONFIG_ITEM_GSMVMODE);
-        configRemoveKey(configSet, CONFIG_ITEM_GSMXOFFSET);
-        configRemoveKey(configSet, CONFIG_ITEM_GSMYOFFSET);
+        if (menuCheckParentalLock() == 0) {
+            configRemoveKey(configSet, CONFIG_ITEM_CONFIGSOURCE);
+            configRemoveKey(configSet, CONFIG_ITEM_DMA);
+            configRemoveKey(configSet, CONFIG_ITEM_COMPAT);
+            configRemoveKey(configSet, CONFIG_ITEM_DNAS);
+            configRemoveKey(configSet, CONFIG_ITEM_ALTSTARTUP);
+
+            //GSM
+            configRemoveKey(configSet, CONFIG_ITEM_ENABLEGSM);
+            configRemoveKey(configSet, CONFIG_ITEM_GSMVMODE);
+            configRemoveKey(configSet, CONFIG_ITEM_GSMXOFFSET);
+            configRemoveKey(configSet, CONFIG_ITEM_GSMYOFFSET);
+            configRemoveKey(configSet, CONFIG_ITEM_GSMFIELDFIX);
+
+            //Cheats
+            configRemoveKey(configSet, CONFIG_ITEM_ENABLECHEAT);
+            configRemoveKey(configSet, CONFIG_ITEM_CHEATMODE);
+
+#ifdef PADEMU
+            //PADEMU
+            configRemoveKey(configSet, CONFIG_ITEM_ENABLEPADEMU);
+            configRemoveKey(configSet, CONFIG_ITEM_PADEMUSETTINGS);
 #endif
-#ifdef CHEAT
-       configRemoveKey(configSet, CONFIG_ITEM_ENABLECHEAT);
-       configRemoveKey(configSet, CONFIG_ITEM_CHEATMODE);
-#endif
-#ifdef VMC
-        configRemoveVMC(configSet, 0);
-        configRemoveVMC(configSet, 1);
-#endif
-        menuSaveConfig();
+
+            //VMC
+            configRemoveVMC(configSet, 0);
+            configRemoveVMC(configSet, 1);
+
+            menuSaveConfig();
+        }
     } else if (result > 0) { // test button pressed or save button
         compatMode = 0;
         for (i = 0; i < COMPAT_MODE_COUNT; ++i) {
@@ -1124,7 +1538,7 @@ int guiShowCompatConfig(int id, item_list_t *support, config_set_t *configSet)
         else
             configRemoveKey(configSet, CONFIG_ITEM_COMPAT);
 
-#ifdef GSM
+        //GSM
         diaGetInt(diaGSConfig, GSMCFG_ENABLEGSM, &EnableGSM);
         if (EnableGSM != 0)
             configSetInt(configSet, CONFIG_ITEM_ENABLEGSM, EnableGSM);
@@ -1148,9 +1562,14 @@ int guiShowCompatConfig(int id, item_list_t *support, config_set_t *configSet)
             configSetInt(configSet, CONFIG_ITEM_GSMYOFFSET, GSMYOffset);
         else
             configRemoveKey(configSet, CONFIG_ITEM_GSMYOFFSET);
-#endif
 
-#ifdef CHEAT
+        diaGetInt(diaGSConfig, GSMCFG_GSMFIELDFIX, &GSMFIELDFix);
+        if (GSMFIELDFix != 0)
+            configSetInt(configSet, CONFIG_ITEM_GSMFIELDFIX, GSMFIELDFix);
+        else
+            configRemoveKey(configSet, CONFIG_ITEM_GSMFIELDFIX);
+
+        //Cheats
         diaGetInt(diaCheatConfig, CHTCFG_ENABLECHEAT, &EnableCheat);
         if (EnableCheat != 0)
             configSetInt(configSet, CONFIG_ITEM_ENABLECHEAT, EnableCheat);
@@ -1162,6 +1581,20 @@ int guiShowCompatConfig(int id, item_list_t *support, config_set_t *configSet)
             configSetInt(configSet, CONFIG_ITEM_CHEATMODE, CheatMode);
         else
             configRemoveKey(configSet, CONFIG_ITEM_CHEATMODE);
+
+#ifdef PADEMU
+        //PADEMU
+        diaGetInt(diaPadEmuConfig, PADCFG_PADEMU_ENABLE, &EnablePadEmu);
+
+        if (EnablePadEmu != 0)
+            configSetInt(configSet, CONFIG_ITEM_ENABLEPADEMU, EnablePadEmu);
+        else
+            configRemoveKey(configSet, CONFIG_ITEM_ENABLEPADEMU);
+
+        if (PadEmuSettings != 0)
+            configSetInt(configSet, CONFIG_ITEM_PADEMUSETTINGS, PadEmuSettings);
+        else
+            configRemoveKey(configSet, CONFIG_ITEM_PADEMUSETTINGS);
 #endif
 
         diaGetString(diaCompatConfig, COMPAT_GAMEID, hexid, sizeof(hexid));
@@ -1174,12 +1607,11 @@ int guiShowCompatConfig(int id, item_list_t *support, config_set_t *configSet)
         else
             configRemoveKey(configSet, CONFIG_ITEM_ALTSTARTUP);
 
-#ifdef VMC
+        //VMC
         configSetVMC(configSet, vmc1, 0);
         configSetVMC(configSet, vmc2, 1);
         guiShowVMCConfig(id, support, vmc1, 0, 1);
         guiShowVMCConfig(id, support, vmc2, 1, 1);
-#endif
 
         switch (result) {
             case COMPAT_SAVE:
@@ -1318,26 +1750,23 @@ static void guiDrawBusy()
     if (gTheme->loadingIcon) {
         GSTEXTURE *texture = thmGetTexture(LOAD0_ICON + (guiFrameId >> 1) % gTheme->loadingIconCount);
         if (texture && texture->Mem) {
-            u64 mycolor = GS_SETREG_RGBA(0x080, 0x080, 0x080, bfadeout);
+            u64 mycolor = GS_SETREG_RGBA(0x80, 0x80, 0x80, bfadeout);
             rmDrawPixmap(texture, gTheme->loadingIcon->posX, gTheme->loadingIcon->posY, gTheme->loadingIcon->aligned, gTheme->loadingIcon->width, gTheme->loadingIcon->height, gTheme->loadingIcon->scaled, mycolor);
         }
     }
 }
 
-static int wfadeout = 0x0150;
+static int wfadeout = 0x80;
 static void guiRenderGreeting()
 {
-    int fade = wfadeout > 0xFF ? 0xFF : wfadeout;
-    u64 mycolor = GS_SETREG_RGBA(0x10, 0x10, 0x10, fade >> 1);
+    u64 mycolor = GS_SETREG_RGBA(0x00, 0x00, 0x00, wfadeout);
     rmDrawRect(0, 0, screenWidth, screenHeight, mycolor);
 
     GSTEXTURE *logo = thmGetTexture(LOGO_PICTURE);
     if (logo) {
-        mycolor = GS_SETREG_RGBA(0x080, 0x080, 0x080, fade >> 1);
+        mycolor = GS_SETREG_RGBA(0x80, 0x80, 0x80, wfadeout);
         rmDrawPixmap(logo, screenWidth >> 1, gTheme->usedHeight >> 1, ALIGN_CENTER, logo->Width, logo->Height, SCALING_RATIO, mycolor);
     }
-
-    return;
 }
 
 static float mix(float a, float b, float t)
@@ -1515,31 +1944,40 @@ void guiDrawBGPlasma()
 
     for (y = pery; y < ymax; y++) {
         for (x = 0; x < PLASMA_W; x++) {
-            u32 fper = guiCalcPerlin((float)(2 * x) / PLASMA_W, (float)(2 * y) / PLASMA_H, perz) * 0x080 + 0x080;
+            u32 fper = guiCalcPerlin((float)(2 * x) / PLASMA_W, (float)(2 * y) / PLASMA_H, perz) * 0x80 + 0x80;
 
             *buf = GS_SETREG_RGBA(
                 (u32)(fper * curbgColor[0]) >> 8,
                 (u32)(fper * curbgColor[1]) >> 8,
                 (u32)(fper * curbgColor[2]) >> 8,
-                0x080);
+                0x80);
 
             ++buf;
         }
     }
 
     pery = ymax;
+    rmInvalidateTexture(&gBackgroundTex);
     rmDrawPixmap(&gBackgroundTex, 0, 0, ALIGN_NONE, screenWidth, screenHeight, SCALING_NONE, gDefaultCol);
 }
 
 int guiDrawIconAndText(int iconId, int textId, int font, int x, int y, u64 color)
 {
     GSTEXTURE *iconTex = thmGetTexture(iconId);
+    int w = (iconTex->Width * 20) / iconTex->Height;
+    int h = 20;
+
     if (iconTex && iconTex->Mem) {
-        rmDrawPixmap(iconTex, x, y, ALIGN_NONE, iconTex->Width, iconTex->Height, SCALING_RATIO, gDefaultCol);
-        x += iconTex->Width + 2;
+        y += h >> 1;
+        rmDrawPixmap(iconTex, x, y, ALIGN_VCENTER, w, h, SCALING_RATIO, gDefaultCol);
+        x += rmWideScale(w) + 2;
+    }
+    else {
+        // HACK: font is aligned to VCENTER, the default height icon height is 20
+        y += 10;
     }
 
-    x = fntRenderString(font, x, y, ALIGN_NONE, 0, 0, _l(textId), color);
+    x = fntRenderString(font, x, y, ALIGN_VCENTER, 0, 0, _l(textId), color);
 
     return x;
 }
@@ -1555,23 +1993,39 @@ static void guiDrawOverlays()
         else
             bfadeout = 0x0;
     } else {
-        if (bfadeout < 0x080)
+        if (bfadeout < 0x80)
             bfadeout += 0x08;
     }
 
-    if (bfadeout > 0)
+    if (bfadeout > 0 && !toggleSfx)
         guiDrawBusy();
 
 #ifdef __DEBUG
-    // fps meter
-    char fps[20];
+    char text[20];
+    int x = screenWidth - 120;
+    int y = 15;
+    int yadd = 15;
 
-    if (time_since_last != 0)
-        snprintf(fps, sizeof(fps), "%3d ms %3.1f FPS", time_render, 1000.0f / (float)time_since_last);
-    else
-        snprintf(fps, sizeof(fps), "%3d ms ----- FPS", time_render);
+    snprintf(text, sizeof(text), "VRAM:");
+    fntRenderString(gTheme->fonts[0], x, y, ALIGN_LEFT, 0, 0, text, GS_SETREG_RGBA(0x60, 0x60, 0x60, 0x80));
+    y += yadd;
 
-    fntRenderString(gTheme->fonts[0], screenWidth - 90, 30, ALIGN_CENTER, 0, 0, fps, GS_SETREG_RGBA(0x060, 0x060, 0x060, 0x060));
+    snprintf(text, sizeof(text), "%dKiB FIXED", gsGlobal->CurrentPointer / 1024);
+    fntRenderString(gTheme->fonts[0], x, y, ALIGN_LEFT, 0, 0, text, GS_SETREG_RGBA(0x60, 0x60, 0x60, 0x80));
+    y += yadd;
+
+    snprintf(text, sizeof(text), "%dKiB TEXMAN", ((4*1024*1024) - gsGlobal->CurrentPointer) / 1024);
+    fntRenderString(gTheme->fonts[0], x, y, ALIGN_LEFT, 0, 0, text, GS_SETREG_RGBA(0x60, 0x60, 0x60, 0x80));
+    y += yadd;
+    y += yadd; // Empty line
+
+    if (time_since_last != 0) {
+        fps = fps * 0.99 + 10.0f / (float)time_since_last;
+
+        snprintf(text, sizeof(text), "%.1f FPS", fps);
+        fntRenderString(gTheme->fonts[0], x, y, ALIGN_LEFT, 0, 0, text, GS_SETREG_RGBA(0x60, 0x60, 0x60, 0x80));
+        y += yadd;
+    }
 #endif
 
     // Last Played Auto Start
@@ -1579,16 +2033,19 @@ static void guiDrawOverlays()
         if (CronStart == 0) {
             CronStart = clock() / CLOCKS_PER_SEC;
         } else {
+            char strAutoStartInNSecs[21];
+            double CronCurrent;
+
             CronCurrent = clock() / CLOCKS_PER_SEC;
             RemainSecs = gAutoStartLastPlayed - (CronCurrent - CronStart);
             snprintf(strAutoStartInNSecs, sizeof(strAutoStartInNSecs), _l(_STR_AUTO_START_IN_N_SECS), RemainSecs);
-            fntRenderString(gTheme->fonts[0], screenWidth / 2, screenHeight / 2, ALIGN_CENTER, 0, 0, strAutoStartInNSecs, GS_SETREG_RGBA(0x060, 0x060, 0x060, 0x060));
+            fntRenderString(gTheme->fonts[0], screenWidth / 2, screenHeight / 2, ALIGN_CENTER, 0, 0, strAutoStartInNSecs, GS_SETREG_RGBA(0x60, 0x60, 0x60, 0x80));
         }
     }
 
     // BLURT output
-    if (!gDisableDebug)
-        fntRenderString(gTheme->fonts[0], 0, screenHeight - 24, ALIGN_NONE, 0, 0, blurttext, GS_SETREG_RGBA(255, 255, 0, 128));
+//    if (!gDisableDebug)
+//        fntRenderString(gTheme->fonts[0], 0, screenHeight - 24, ALIGN_NONE, 0, 0, blurttext, GS_SETREG_RGBA(255, 255, 0, 128));
 }
 
 static void guiReadPads()
@@ -1633,15 +2090,28 @@ static void guiShow()
         screenHandler->renderScreen();
 }
 
+void guiDelay(int milliSeconds)
+{
+    clock_t time_end = time_end = clock() + milliSeconds * CLOCKS_PER_SEC / 1000;
+    while (clock() < time_end) {}
+
+    toggleSfx = 0;
+}
+
 void guiIntroLoop(void)
 {
     int endIntro = 0;
+
+     if (gEnableSFX && gEnableBootSND)
+         toggleSfx = -1;
+
     while (!endIntro) {
         guiStartFrame();
 
-        guiReadPads();
+        if (wfadeout < 0x80 && toggleSfx)
+            guiDelay(gFadeDelay);
 
-        if (wfadeout < 0x0FF)
+        if (wfadeout < 0x80 && !toggleSfx)
             guiShow();
 
         if (gInitComplete)
@@ -1699,6 +2169,7 @@ void guiSetFrameHook(gui_callback_t cback)
 
 void guiSwitchScreen(int target, int transition)
 {
+    sfxPlay(SFX_TRANSITION);
     if (transition == TRANSITION_LEFT) {
         transitionX = 1;
         transMax = screenWidth;
@@ -1742,19 +2213,15 @@ void guiUpdateScrollSpeed(void)
 
 void guiUpdateScreenScale(void)
 {
-    if (gWideScreen)
-        wideScreenScale = 0.75f;
-    else
-        wideScreenScale = 1.0f;
-
-    // apply the scaling to renderman and font rendering
-    rmSetAspectRatio(wideScreenScale, 1.0f);
-    fntSetAspectRatio(wideScreenScale, 1.0f);
+    fntUpdateAspectRatio();
 }
 
 int guiMsgBox(const char *text, int addAccept, struct UIItem *ui)
 {
     int terminate = 0;
+
+    sfxPlay(SFX_MESSAGE);
+
     while (!terminate) {
         guiStartFrame();
 
@@ -1781,6 +2248,13 @@ int guiMsgBox(const char *text, int addAccept, struct UIItem *ui)
             guiDrawIconAndText(gSelectButton == KEY_CIRCLE ? CIRCLE_ICON : CROSS_ICON, _STR_ACCEPT, gTheme->fonts[0], 70, 417, gTheme->selTextColor);
 
         guiEndFrame();
+    }
+
+    if (terminate == 1) {
+        sfxPlay(SFX_CANCEL);
+    }
+    if (terminate == 2) {
+        sfxPlay(SFX_CONFIRM);
     }
 
     return terminate - 1;
@@ -1826,3 +2300,52 @@ void guiWarning(const char *text, int count)
 
     delay(count);
 }
+
+int guiConfirmVideoMode(void)
+{
+    clock_t timeStart, timeNow, timeElasped;
+    int terminate = 0;
+
+    sfxPlay(SFX_MESSAGE);
+
+    timeStart = clock() / (CLOCKS_PER_SEC / 1000);
+    while (!terminate) {
+        guiStartFrame();
+
+        readPads();
+
+        if (getKeyOn(gSelectButton == KEY_CIRCLE ? KEY_CROSS : KEY_CIRCLE))
+            terminate = 1;
+        else if (getKeyOn(gSelectButton))
+            terminate = 2;
+
+        //If the user fails to respond within the timeout period, deem it as a cancel operation.
+        timeNow = clock() / (CLOCKS_PER_SEC / 1000);
+        timeElasped = (timeNow < timeStart) ? UINT_MAX - timeStart + timeNow + 1 : timeNow - timeStart;
+        if (timeElasped >= OPL_VMODE_CHANGE_CONFIRMATION_TIMEOUT_MS)
+            terminate = 1;
+
+        guiShow();
+
+        rmDrawRect(0, 0, screenWidth, screenHeight, gColDarker);
+
+        rmDrawLine(50, 75, screenWidth - 50, 75, gColWhite);
+        rmDrawLine(50, 410, screenWidth - 50, 410, gColWhite);
+
+        fntRenderString(gTheme->fonts[0], screenWidth >> 1, gTheme->usedHeight >> 1, ALIGN_CENTER, 0, 0, _l(_STR_CFM_VMODE_CHG), gTheme->textColor);
+        guiDrawIconAndText(gSelectButton == KEY_CIRCLE ? CROSS_ICON : CIRCLE_ICON, _STR_BACK, gTheme->fonts[0], 500, 417, gTheme->selTextColor);
+        guiDrawIconAndText(gSelectButton == KEY_CIRCLE ? CIRCLE_ICON : CROSS_ICON, _STR_ACCEPT, gTheme->fonts[0], 70, 417, gTheme->selTextColor);
+
+        guiEndFrame();
+    }
+
+    if (terminate == 1) {
+        sfxPlay(SFX_CANCEL);
+    }
+    if (terminate == 2) {
+        sfxPlay(SFX_CONFIRM);
+    }
+
+    return terminate - 1;
+}
+

@@ -52,7 +52,40 @@
 #ifndef NO_SYS
 #define NO_SYS 0
 #endif
+/* ---------- Core locking ---------- */
+/**
+ * LWIP_TCPIP_CORE_LOCKING
+ * Creates a global mutex that is held during TCPIP thread operations.
+ * Can be locked by client code to perform lwIP operations without changing
+ * into TCPIP thread using callbacks. See LOCK_TCPIP_CORE() and
+ * UNLOCK_TCPIP_CORE().
+ * Your system should provide mutexes supporting priority inversion to use this.
+ */
+#if !defined LWIP_TCPIP_CORE_LOCKING || defined __DOXYGEN__
+#define LWIP_TCPIP_CORE_LOCKING         1
+#endif
+
+/**
+ * LWIP_TCPIP_CORE_LOCKING_INPUT: when LWIP_TCPIP_CORE_LOCKING is enabled,
+ * this lets tcpip_input() grab the mutex for input packets as well,
+ * instead of allocating a message and passing it to tcpip_thread.
+ *
+ * ATTENTION: this does not work when tcpip_input() is called from
+ * interrupt context!
+ */
+#if !defined LWIP_TCPIP_CORE_LOCKING_INPUT || defined __DOXYGEN__
+#define LWIP_TCPIP_CORE_LOCKING_INPUT   0
+#endif
 /* ---------- Memory options ---------- */
+/**
+ * MEM_LIBC_MALLOC==1: Use malloc/free/realloc provided by your C-library
+ * instead of the lwip internal allocator. Can save code size if you
+ * already use it.
+ */
+#if !defined MEM_LIBC_MALLOC
+#define MEM_LIBC_MALLOC 0
+#endif
+
 /* MEM_ALIGNMENT: should be set to the alignment of the CPU for which
    lwIP is compiled. 4 byte alignment -> define MEM_ALIGNMENT to 4, 2
    byte alignment -> define MEM_ALIGNMENT to 2. */
@@ -102,7 +135,7 @@ a lot of data that needs to be copied, this should be set high. */
 /* MEMP_NUM_SYS_TIMEOUT: the number of simulateously active
    timeouts. */
 #ifndef MEMP_NUM_SYS_TIMEOUT
-#define MEMP_NUM_SYS_TIMEOUT 3
+#define MEMP_NUM_SYS_TIMEOUT (LWIP_TCP + LWIP_ARP)
 #endif
 
 /* The following four are used only with the sequential API and can be
@@ -621,6 +654,39 @@ a lot of data that needs to be copied, this should be set high. */
 
 #ifndef DBG_MIN_LEVEL
 #define DBG_MIN_LEVEL DBG_LEVEL_OFF
+#endif
+
+/*
+   --------------------------------------
+   ---------- Checksum options ----------
+   --------------------------------------
+*/
+/**
+ * CHECKSUM_CHECK_IP==1: Check checksums in software for incoming IP packets.
+ */
+#if !defined CHECKSUM_CHECK_IP
+#define CHECKSUM_CHECK_IP               1
+#endif
+
+/**
+ * CHECKSUM_CHECK_UDP==1: Check checksums in software for incoming UDP packets.
+ */
+#if !defined CHECKSUM_CHECK_UDP
+#define CHECKSUM_CHECK_UDP              1
+#endif
+
+/**
+ * CHECKSUM_CHECK_TCP==1: Check checksums in software for incoming TCP packets.
+ */
+#if !defined CHECKSUM_CHECK_TCP
+#define CHECKSUM_CHECK_TCP              1
+#endif
+
+/**
+ * CHECKSUM_CHECK_ICMP==1: Check checksums in software for incoming ICMP packets.
+ */
+#if !defined CHECKSUM_CHECK_ICMP
+#define CHECKSUM_CHECK_ICMP             1
 #endif
 
 #endif /* __LWIP_OPT_H__ */

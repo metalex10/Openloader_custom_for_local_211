@@ -1,5 +1,5 @@
 # Laotian translation by blackbutterfly (Anousith Phompida <noum_terry@hotmail.com>)
-# For Open PS2 Loader 0.9.3 betas - Official OPL Beta thread @http://psx-scene.com/forums/f150/open-ps2-loader-official-beta-revisions-releases-156209/
+# For Open PS2 Loader 0.9.3+ betas - Official OPL Beta thread @http://psx-scene.com/forums/f150/open-ps2-loader-official-beta-revisions-releases-156209/
 Laotian
 Open PS2 Loader %s
 ບັນທຶກການປ່ຽນແປງ
@@ -111,7 +111,7 @@ NetBIOS
 ອ່ານແບບຖືກຕ້ອງແມ່ນຍຳ
 ວິທີການອ່ານຂໍ້ມູນທີ່ມີທາງເລືອກ
 Unhook Syscalls
-ຂ້າມວິດີໂອ
+ຂ້າມການຫຼິ້ນວິດິໂອ
 ປະມວນຜົນ DVD-DL 
 Disable IGR
 High module storage
@@ -131,7 +131,7 @@ Start
 ມີ File ຂອງ VMC ຢູ່ແລ້ວ
 ຂະໜາດຂອງ File VMC ບໍ່ຖືກຕ້ອງ
 File VMC(ກ້ອນເຊບສະເໝືອນຈິງ) ຈະຕ້ອງຖືກສ້າງຂຶ້ນ
-ເກີດຂໍ້ຜິດພາດກັບ VMC(ກ້ອນເຊບສະເໝືອນຈິງ) %s, ດຳເນີນການຕໍ່ດ້ວຍກ້ອນເຊບແທ້ (ຊ່ອງ %d) ຫຼື ບໍ່?
+Error accessing VMC %s. Continue with the Memory Card in slot %d?
 ເອີ້ນຄືນໃໝ່ແບບອັດຕະໂນມັດ
 ກ່ຽວກັບໂປຣແກຣມ
 ກຸ່ມນັກພັດທະນາໂປຣແກຣມ
@@ -182,6 +182,8 @@ H-POS
 ການປັບແຕ່ງຄ່າສະແດງຜົນຕາມແນວນອນ
 V-POS
 ການປັບແຕ່ງຄ່າສະແດງຜົນຕາມແນວຕັ້ງ
+Overscan
+Overscan Adjustment
 ຂ້າມຂັ້ນຕອນ FMV
 ຂ້າມຂັ້ນຕອນສະແດງພາບເຄື່ອນໄຫວ Full Video
 ຕັ້ງຄ່າການໂກງເກມ
@@ -208,3 +210,50 @@ V-POS
 ຕັ້ງຄ່າຫົວໜ່ວຍ ວິນາທີ, ໃສ່ 0 ເພື່ອປິດການເປີດໃຊ້ແບບໂອໂຕ
 PS2 Logo
 ຈະຖືກສະແດງຜົນ ກໍຕໍ່ເມື່ອໂລໂກ້ຂອງແຜ່ນຖືກຕ້ອງ ແລະ ສອດຄ່ອງຕາມໂຊນຂອງເຄື່ອງ
+Configure PADEMU
+Pad Emulator Settings
+Enable PadEmulator
+Turns on/off PadEmulator for selected game.
+Pad Emulator mode
+Select Pad Emulator mode.
+DualShock3/4 USB
+DualShock3/4 BT
+Settings for port:
+Select Pad Emulator port for settings.
+Enable emulation
+Turns on/off Pad Emulator for selected port.
+Enable vibration
+Turns on/off vibration for Pad Emulator selected port.
+Usb bluetooth adapter mac address:
+DS Controller paired to mac address:
+Pair
+Pair DS controller
+Pair DS controller with bluetooth adapter mac address.
+Not connected
+Bluetooth adapter information
+Shows more information and supported features
+HCI Version:
+LMP Version:
+Manufacturer ID:
+Support features:
+Yes
+No
+Bluetooth adapter should be fully compatible with DS3/DS4 controllers.
+Bluetooth adapter may not work correctly with DS3/DS4 controllers.
+Enable Multitap emulation
+Turns on/off Multitap emulation for selected game.
+Multitap emulator on port
+Select port for Multitap emulation.
+Disable workaround for fake ds3
+Some fake ds3s need workaround, this option will disable it.
+Emulate FIELD flipping
+Fix for games that glitch under progressive video modes.
+Parental Lock Settings
+Parental Lock Password
+Leave blank to disable the parental lock.
+Enter Parental Lock Password
+Parental lock password incorrect.
+Parental lock disabled.
+Build Options:
+Error - this password cannot be used.
+VMC %s file is fragmented. Continue with Memory Card in slot %d?

@@ -127,7 +127,11 @@ void guiShowNetCompatUpdate(void);
 void guiShowAbout();
 void guiShowConfig();
 void guiShowUIConfig();
+void guiShowAudioConfig();
 void guiShowNetConfig();
+void guiShowParentalLockConfig();
+
+void guiDelay(int milliSeconds);
 
 /** Renders the given string on screen for the given function until it's io finishes 
 * @note The ptr pointer is watched for it's value. The IO is considered finished when the value becomes zero. 
@@ -144,10 +148,10 @@ void guiRenderTextScreen(const unsigned char *message);
 
 int guiAltStartupNameHandler(char *text, int maxLen);
 
-#ifdef VMC
 int guiVmcNameHandler(char *text, int maxLen);
-#endif
 
 void guiWarning(const char *text, int count);
+
+int guiConfirmVideoMode(void);
 
 #endif

@@ -79,9 +79,15 @@ static void ResetIopSpecial(const char *args, unsigned int arglen)
     sbv_patch_enable_lmb();
 
     DPRINTF("Loading extra IOP modules...\n");
-    if (GameMode == USB_MODE) {
+#ifdef PADEMU
+#define PADEMU_ARG || EnablePadEmuOp
+#else
+#define PADEMU_ARG
+#endif
+    if (GameMode == USB_MODE PADEMU_ARG) {
         LoadOPLModule(OPL_MODULE_ID_USBD, 0, 11, "thpri=15,16");
-    } else if (GameMode == ETH_MODE) {
+    }
+    if (GameMode == ETH_MODE) {
         LoadOPLModule(OPL_MODULE_ID_SMSTCPIP, 0, 0, NULL);
         LoadOPLModule(OPL_MODULE_ID_SMAP, 0, g_ipconfig_len, g_ipconfig);
         LoadOPLModule(OPL_MODULE_ID_SMBINIT, 0, 0, NULL);
@@ -116,7 +122,7 @@ int New_Reset_Iop(const char *arg, int arglen)
     iop_reboot_count++;
 
     // Reseting IOP.
-    while (!Reset_Iop(NULL, 0)) {
+    while (!Reset_Iop("", 0)) {
         ;
     }
     while (!SifIopSync()) {
@@ -138,17 +144,19 @@ int New_Reset_Iop(const char *arg, int arglen)
             GS_BGCOLOUR = 0x00FFFF; //Yellow
     }
 
-#ifdef VMC
     if (iop_reboot_count >= 2) {
+#ifdef PADEMU
+        PadEmuSettings |= (LoadOPLModule(OPL_MODULE_ID_MCEMU, 0, 0, NULL) > 0) << 24;
+#else
         LoadOPLModule(OPL_MODULE_ID_MCEMU, 0, 0, NULL);
+#endif
+    }
+
+#ifdef PADEMU
+    if (iop_reboot_count >= 2 && EnablePadEmuOp) {
+        LoadOPLModule(OPL_MODULE_ID_PADEMU, 0, 4, (char *)&PadEmuSettings);
     }
 #endif
-
-    /*	For HDD mode, CDVDMAN's name is set to DEV9 (so that the game can find DEV9 loaded) in order for network support to still work.
-		However, some games will stop working (for one reason or another) if they find DEV9 loaded when it should not...
-		SMB mode never has its CDVDMAN name changed to DEV9 because it cannot share the SMAP interface with the game.	*/
-    if (g_compat_mask & COMPAT_MODE_8)
-        ChangeModuleName("dev9", "cdvdman");
 
     DPRINTF("Exiting services...\n");
     SifExitIopHeap();
@@ -171,8 +179,9 @@ int New_Reset_Iop(const char *arg, int arglen)
 /*----------------------------------------------------------------------------------------*/
 int Reset_Iop(const char *arg, int mode)
 {
-    struct _iop_reset_pkt reset_pkt; /* Implicitly aligned. */
+    static SifCmdResetData_t reset_pkt __attribute__((aligned(64)));
     struct t_SifDmaTransfer dmat;
+    int arglen;
 
     _iop_reboot_count++; // increment reboot counter to allow RPC clients to detect unbinding!
 
@@ -188,18 +197,13 @@ int Reset_Iop(const char *arg, int mode)
 				That caused SifSetDChain() to be run ASAP, which re-enables SIF0.
 				I don't find that a good workaround because it may result in a timing problem.	*/
 
-    memset(&reset_pkt, 0, sizeof reset_pkt);
+    for (arglen = 0; arg[arglen] != '\0'; arglen++)
+        reset_pkt.arg[arglen] = arg[arglen];
 
-    reset_pkt.header.size = sizeof reset_pkt;
+    reset_pkt.header.psize = sizeof reset_pkt; //dsize is not initialized (and not processed, even on the IOP).
     reset_pkt.header.cid = SIF_CMD_RESET_CMD;
-
+    reset_pkt.arglen = arglen;
     reset_pkt.mode = mode;
-    if (arg != NULL) {
-        strncpy(reset_pkt.arg, arg, RESET_ARG_MAX);
-        reset_pkt.arg[RESET_ARG_MAX] = '\0';
-
-        reset_pkt.arglen = strlen(reset_pkt.arg) + 1;
-    }
 
     dmat.src = &reset_pkt;
     dmat.dest = (void *)SifGetReg(SIF_SYSREG_SUBADDR);

@@ -9,39 +9,15 @@
 #include "include/textures.h"
 #include "include/ioman.h"
 #include "include/system.h"
-#ifdef CHEAT
+#include "include/extern_irx.h"
 #include "include/cheatman.h"
-#endif
 #include "modules/iopcore/common/cdvd_config.h"
 
 #include <hdd-ioctl.h>
 
 #define OPL_HDD_MODE_PS2LOGO_OFFSET 0x17F8
 
-extern void *hdd_cdvdman_irx;
-extern int size_hdd_cdvdman_irx;
-
-extern void *hdd_hdpro_cdvdman_irx;
-extern int size_hdd_hdpro_cdvdman_irx;
-
-extern void *ps2atad_irx;
-extern int size_ps2atad_irx;
-
-extern void *hdpro_atad_irx;
-extern int size_hdpro_atad_irx;
-
-extern void *ps2hdd_irx;
-extern int size_ps2hdd_irx;
-
-extern void *ps2fs_irx;
-extern int size_ps2fs_irx;
-
-#ifdef VMC
-extern void *hdd_mcemu_irx;
-extern int size_hdd_mcemu_irx;
-#endif
-
-static unsigned char hddForceUpdate = 1;
+static unsigned char hddForceUpdate = 0;
 static unsigned char hddHDProKitDetected = 0;
 static unsigned char hddModulesLoaded = 0;
 
@@ -52,6 +28,9 @@ const char *oplPart = "hdd0:+OPL";
 
 // forward declaration
 static item_list_t hddGameList;
+
+static int hddLoadGameListCache(hdl_games_list_t *cache);
+static int hddUpdateGameListCache(hdl_games_list_t *cache, hdl_games_list_t *game_list);
 
 static void hddInitModules(void)
 {
@@ -90,8 +69,6 @@ static int hddCheckHDProKit(void)
 
     // check result
     if ((res & 0xff) == 0xe7) {
-        HDPROreg_IO8 = 0xe3;
-        CDVDreg_STATUS = 0;
         // HD Pro IO finish commands sequence
         HDPROreg_IO8 = 0xf3;
         CDVDreg_STATUS = 0;
@@ -116,8 +93,8 @@ static int CreateOPLPartition(const char *oplPart, const char *mountpoint)
     int fd, result;
     char cmd[43];
 
-    sprintf(cmd, "%s,128M", oplPart);
-    if ((fd = fileXioOpen(cmd, O_CREAT | O_TRUNC | O_RDWR, 0644)) >= 0) {
+    sprintf(cmd, "%s,,,128M,PFS", oplPart);
+    if ((fd = fileXioOpen(cmd, O_CREAT | O_TRUNC | O_WRONLY)) >= 0) {
         fileXioClose(fd);
         result = fileXioFormat(mountpoint, oplPart, (const char *)&formatArg, sizeof(formatArg));
     } else {
@@ -143,14 +120,18 @@ void hddLoadModules(void)
     if (!hddModulesLoaded) {
         hddModulesLoaded = 1;
 
+        //DEV9 must be loaded, as HDD.IRX depends on it. Even if not required by the I/F (i.e. HDPro)
+        sysInitDev9();
+
         // try to detect HD Pro Kit (not the connected HDD),
         // if detected it loads the specific ATAD module
         hddHDProKitDetected = hddCheckHDProKit();
-        if (hddHDProKitDetected)
+        if (hddHDProKitDetected) {
             ret = sysLoadModuleBuffer(&hdpro_atad_irx, size_hdpro_atad_irx, 0, NULL);
-        else {
-            sysInitDev9();
+            sysLoadModuleBuffer(&xhdd_irx, size_xhdd_irx, 6, "-hdpro");
+        } else {
             ret = sysLoadModuleBuffer(&ps2atad_irx, size_ps2atad_irx, 0, NULL);
+            sysLoadModuleBuffer(&xhdd_irx, size_xhdd_irx, 0, NULL);
         }
         if (ret < 0) {
             LOG("HDD: No HardDisk Drive detected.\n");
@@ -160,14 +141,13 @@ void hddLoadModules(void)
 
         ret = sysLoadModuleBuffer(&ps2hdd_irx, size_ps2hdd_irx, sizeof(hddarg), hddarg);
         if (ret < 0) {
-            LOG("HDD: HardDisk Drive not formatted (HDD).\n");
-            setErrorMessageWithCode(_STR_HDD_NOT_FORMATTED_ERROR, ERROR_HDD_MODULE_HDD_FAILURE);
+            LOG("HDD: No HardDisk Drive detected.\n");
+            setErrorMessageWithCode(_STR_HDD_NOT_CONNECTED_ERROR, ERROR_HDD_MODULE_HDD_FAILURE);
             return;
         }
 
         //Check if a HDD unit is connected
-        ret = fileXioDevctl("hdd0:", APA_DEVCTL_STATUS, NULL, 0, NULL, 0);
-        if ((ret >= 3) || (ret < 0)) {
+        if (hddCheck() < 0) {
             LOG("HDD: No HardDisk Drive detected.\n");
             setErrorMessageWithCode(_STR_HDD_NOT_CONNECTED_ERROR, ERROR_HDD_NOT_DETECTED);
             return;
@@ -182,8 +162,6 @@ void hddLoadModules(void)
 
         LOG("HDDSUPPORT modules loaded\n");
 
-        hddSetIdleTimeout(gHDDSpindown * 12); // gHDDSpindown [0..20] -> spindown [0..240] -> seconds [0..1200]
-
         ret = fileXioMount(hddPrefix, oplPart, FIO_MT_RDWR);
         if (ret == -ENOENT) {
             //Attempt to create the partition.
@@ -196,7 +174,7 @@ void hddLoadModules(void)
 void hddInit(void)
 {
     LOG("HDDSUPPORT Init\n");
-    hddForceUpdate = 1;
+    hddForceUpdate = 0; //Use cache at initial startup.
     configGetInt(configGetByType(CONFIG_OPL), "hdd_frames_delay", &hddGameList.delay);
     ioPutRequest(IO_CUSTOM_SIMPLEACTION, &hddInitModules);
     hddGameList.enabled = 1;
@@ -210,18 +188,32 @@ item_list_t *hddGetObject(int initOnly)
 }
 
 static int hddNeedsUpdate(void)
-{
-    if (hddForceUpdate) {
-        hddForceUpdate = 0;
-        return 1;
-    }
-
-    return 0;
+{   /* Auto refresh is disabled by setting HDD_MODE_UPDATE_DELAY to MENU_UPD_DELAY_NOUPDATE, within hddsupport.h.
+       Hence any update request would be issued by the user, which should be taken as an explicit request to re-scan the HDD. */
+    return 1;
 }
 
 static int hddUpdateGameList(void)
 {
-    return (hddGetHDLGamelist(&hddGames) == 0 ? hddGames.count : 0);
+    hdl_games_list_t hddGamesNew;
+    int ret;
+
+    if (((ret = hddLoadGameListCache(&hddGames)) != 0) || (hddForceUpdate))
+    {
+        hddGamesNew.count = 0;
+        hddGamesNew.games = NULL;
+        ret = hddGetHDLGamelist(&hddGamesNew);
+        if (ret == 0)
+        {
+            hddUpdateGameListCache(&hddGames, &hddGamesNew);
+            hddFreeHDLGamelist(&hddGames);
+            hddGames = hddGamesNew;
+        }
+    }
+
+    hddForceUpdate = 1; //Subsequent refresh operations will cause the HDD to be scanned.
+
+    return (ret == 0 ? hddGames.count : 0);
 }
 
 static int hddGetGameCount(void)
@@ -249,7 +241,6 @@ static char *hddGetGameStartup(int id)
     return hddGames.games[id].startup;
 }
 
-#ifndef __CHILDPROOF
 static void hddDeleteGame(int id)
 {
     hddDeleteHDLGame(&hddGames.games[id]);
@@ -263,24 +254,20 @@ static void hddRenameGame(int id, char *newName)
     hddSetHDLGameInfo(&hddGames.games[id]);
     hddForceUpdate = 1;
 }
-#endif
 
 static void hddLaunchGame(int id, config_set_t *configSet)
 {
     int i, size_irx = 0;
     int EnablePS2Logo = 0;
-#ifdef CHEAT
     int result;
-#endif
     void **irx = NULL;
     char filename[32];
     hdl_game_info_t *game = &hddGames.games[id];
     struct cdvdman_settings_hdd *settings;
 
-#ifdef VMC
-    apa_header_t part_hdr;
+    apa_sub_t parts[APA_MAXSUB + 1];
     char vmc_name[2][32];
-    int fd, part_valid = 0, size_mcemu_irx = 0;
+    int part_valid = 0, size_mcemu_irx = 0, nparts;
     hdd_vmc_infos_t hdd_vmc_infos;
     memset(&hdd_vmc_infos, 0, sizeof(hdd_vmc_infos_t));
 
@@ -288,34 +275,23 @@ static void hddLaunchGame(int id, config_set_t *configSet)
     configGetVMC(configSet, vmc_name[1], sizeof(vmc_name[1]), 1);
 
     if (vmc_name[0][0] || vmc_name[1][0]) {
-        fileXioUmount(hddPrefix);
-        fd = fileXioOpen(oplPart, O_RDONLY, FIO_S_IRUSR | FIO_S_IWUSR | FIO_S_IXUSR | FIO_S_IRGRP | FIO_S_IWGRP | FIO_S_IXGRP | FIO_S_IROTH | FIO_S_IWOTH | FIO_S_IXOTH);
-        if (fd >= 0) {
-            if (fileXioIoctl2(fd, APA_IOCTL2_GETHEADER, NULL, 0, (void *)&part_hdr, sizeof(apa_header_t)) == sizeof(apa_header_t)) {
-                if (part_hdr.nsub <= 4) {
-                    hdd_vmc_infos.parts[0].start = part_hdr.start;
-                    hdd_vmc_infos.parts[0].length = part_hdr.length;
-                    LOG("HDDSUPPORT hdd_vmc_infos.parts[0].start : 0x%X\n", hdd_vmc_infos.parts[0].start);
-                    LOG("HDDSUPPORT hdd_vmc_infos.parts[0].length : 0x%X\n", hdd_vmc_infos.parts[0].length);
-                    for (i = 0; i < part_hdr.nsub; i++) {
-                        hdd_vmc_infos.parts[i + 1].start = part_hdr.subs[i].start;
-                        hdd_vmc_infos.parts[i + 1].length = part_hdr.subs[i].length;
-                        LOG("HDDSUPPORT hdd_vmc_infos.parts[%d].start : 0x%X\n", i + 1, hdd_vmc_infos.parts[i + 1].start);
-                        LOG("HDDSUPPORT hdd_vmc_infos.parts[%d].length : 0x%X\n", i + 1, hdd_vmc_infos.parts[i + 1].length);
-                    }
-                    part_valid = 1;
-                }
+        nparts = hddGetPartitionInfo(oplPart, parts);
+        if (nparts > 0 && nparts <= 5) {
+            for (i = 0; i < nparts; i++) {
+                hdd_vmc_infos.parts[i].start = parts[i].start;
+                hdd_vmc_infos.parts[i].length = parts[i].length;
+                LOG("HDDSUPPORT hdd_vmc_infos.parts[%d].start : 0x%X\n", i, hdd_vmc_infos.parts[i].start);
+                LOG("HDDSUPPORT hdd_vmc_infos.parts[%d].length : 0x%X\n", i, hdd_vmc_infos.parts[i].length);
             }
-            fileXioClose(fd);
+            part_valid = 1;
         }
-        fileXioMount(hddPrefix, oplPart, FIO_MT_RDWR); // if this fails, something is really screwed up
     }
 
     if (part_valid) {
         char vmc_path[256];
         int vmc_id, have_error = 0;
         vmc_superblock_t vmc_superblock;
-        pfs_inode_t pfs_inode;
+        pfs_blockinfo_t blocks[11];
 
         for (vmc_id = 0; vmc_id < 2; vmc_id++) {
             if (vmc_name[vmc_id][0]) {
@@ -330,27 +306,29 @@ static void hddLaunchGame(int id, config_set_t *configSet)
 
                     // Check vmc inode block chain (write operation can cause damage)
                     snprintf(vmc_path, sizeof(vmc_path), "%sVMC/%s.bin", hddPrefix, vmc_name[vmc_id]);
-                    fd = fileXioOpen(vmc_path, O_RDWR, FIO_S_IRUSR | FIO_S_IWUSR | FIO_S_IXUSR | FIO_S_IRGRP | FIO_S_IWGRP | FIO_S_IXGRP | FIO_S_IROTH | FIO_S_IWOTH | FIO_S_IXOTH);
-                    if (fileXioIoctl2(fd, PFS_IOCTL2_GET_INODE, NULL, 0, (void *)&pfs_inode, sizeof(pfs_inode_t)) == sizeof(pfs_inode_t)) {
-                        if (pfs_inode.number_data <= 11) {
-                            have_error = 0;
-                            hdd_vmc_infos.active = 1;
-                            for (i = 0; i < pfs_inode.number_data - 1; i++) {
-                                hdd_vmc_infos.blocks[i].number = pfs_inode.data[i + 1].number;
-                                hdd_vmc_infos.blocks[i].subpart = pfs_inode.data[i + 1].subpart;
-                                hdd_vmc_infos.blocks[i].count = pfs_inode.data[i + 1].count;
-                                LOG("HDDSUPPORT hdd_vmc_infos.blocks[%d].number     : 0x%X\n", i, hdd_vmc_infos.blocks[i].number);
-                                LOG("HDDSUPPORT hdd_vmc_infos.blocks[%d].subpart    : 0x%X\n", i, hdd_vmc_infos.blocks[i].subpart);
-                                LOG("HDDSUPPORT hdd_vmc_infos.blocks[%d].count      : 0x%X\n", i, hdd_vmc_infos.blocks[i].count);
-                            }
-                        } // else Vmc file too much fragmented
+                    if ((nparts = hddGetFileBlockInfo(vmc_path, parts, blocks, 11)) > 0) {
+                        have_error = 0;
+                        hdd_vmc_infos.active = 1;
+                        for (i = 0; i < nparts - 1; i++) {
+                            hdd_vmc_infos.blocks[i].number = blocks[i + 1].number;
+                            hdd_vmc_infos.blocks[i].subpart = blocks[i + 1].subpart;
+                            hdd_vmc_infos.blocks[i].count = blocks[i + 1].count;
+                            LOG("HDDSUPPORT hdd_vmc_infos.blocks[%d].number     : 0x%X\n", i, hdd_vmc_infos.blocks[i].number);
+                            LOG("HDDSUPPORT hdd_vmc_infos.blocks[%d].subpart    : 0x%X\n", i, hdd_vmc_infos.blocks[i].subpart);
+                            LOG("HDDSUPPORT hdd_vmc_infos.blocks[%d].count      : 0x%X\n", i, hdd_vmc_infos.blocks[i].count);
+                        }
+                    } else { // else VMC file is too fragmented
+                        LOG("HDDSUPPORT Block Chain NG\n");
+                        have_error = 2;
                     }
-                    fileXioClose(fd);
                 }
 
                 if (have_error) {
                     char error[256];
-                    snprintf(error, sizeof(error), _l(_STR_ERR_VMC_CONTINUE), vmc_name[vmc_id], (vmc_id + 1));
+                    if (have_error == 2) //VMC file is fragmented
+                        snprintf(error, sizeof(error), _l(_STR_ERR_VMC_FRAGMENTED_CONTINUE), vmc_name[vmc_id], (vmc_id + 1));
+                    else
+                        snprintf(error, sizeof(error), _l(_STR_ERR_VMC_CONTINUE), vmc_name[vmc_id], (vmc_id + 1));
                     if (!guiMsgBox(error, 1, NULL))
                         return;
                 }
@@ -366,7 +344,6 @@ static void hddLaunchGame(int id, config_set_t *configSet)
             }
         }
     }
-#endif
 
     if (gRememberLastPlayed) {
         configSetStr(configGetByType(CONFIG_LAST), "last_played", game->startup);
@@ -386,6 +363,7 @@ static void hddLaunchGame(int id, config_set_t *configSet)
         dmaMode -= 3;
     }
     hddSetTransferMode(dmaType, dmaMode);
+    // gHDDSpindown [0..20] -> spindown [0..240] -> seconds [0..1200]
     hddSetIdleTimeout(gHDDSpindown * 12);
 
     if (hddHDProKitDetected) {
@@ -398,7 +376,6 @@ static void hddLaunchGame(int id, config_set_t *configSet)
 
     sbPrepare(NULL, configSet, size_irx, irx, &i);
 
-#ifdef CHEAT
     if ((result = sbLoadCheats(hddPrefix, game->startup)) < 0) {
         switch (result) {
             case -ENOENT:
@@ -408,7 +385,6 @@ static void hddLaunchGame(int id, config_set_t *configSet)
                 guiWarning(_l(_STR_ERR_CHEATS_LOAD_FAILED), 10);
         }
     }
-#endif
 
     settings = (struct cdvdman_settings_hdd *)((u8 *)irx + i);
 
@@ -424,15 +400,9 @@ static void hddLaunchGame(int id, config_set_t *configSet)
     if (gPS2Logo)
         EnablePS2Logo = CheckPS2Logo(0, game->start_sector + OPL_HDD_MODE_PS2LOGO_OFFSET);
 
-    deinit(NO_EXCEPTION); // CAREFUL: deinit will call hddCleanUp, so hddGames/game will be freed
+    deinit(NO_EXCEPTION, HDD_MODE); // CAREFUL: deinit will call hddCleanUp, so hddGames/game will be freed
 
-#ifdef VMC
-#define HDD_MCEMU size_mcemu_irx, &hdd_mcemu_irx,
-#else
-#define HDD_MCEMU
-#endif
-
-    sysLaunchLoaderElf(filename, "HDD_MODE", size_irx, irx, HDD_MCEMU EnablePS2Logo, compatMode);
+    sysLaunchLoaderElf(filename, "HDD_MODE", size_irx, irx, size_mcemu_irx, &hdd_mcemu_irx, EnablePS2Logo, compatMode);
 }
 
 static config_set_t *hddGetConfig(int id)
@@ -440,18 +410,14 @@ static config_set_t *hddGetConfig(int id)
     char path[256];
     hdl_game_info_t *game = &hddGames.games[id];
 
-#ifdef OPL_IS_DEV_BUILD
-    snprintf(path, sizeof(path), "%sCFG-DEV/%s.cfg", hddPrefix, game->startup);
-#else
-    snprintf(path, sizeof(path), "%sCFG/%s.cfg", hddPrefix, game->startup);
-#endif
+    snprintf(path, sizeof(path), "%s"OPL_FOLDER"/%s.cfg", hddPrefix, game->startup);
     config_set_t *config = configAlloc(0, NULL, path);
-    configRead(config);
+    configRead(config); //Does not matter if the config file exists or not.
 
     configSetStr(config, CONFIG_ITEM_NAME, game->name);
     configSetInt(config, CONFIG_ITEM_SIZE, game->total_size_in_kb >> 10);
     configSetStr(config, CONFIG_ITEM_FORMAT, "HDL");
-    configSetStr(config, CONFIG_ITEM_MEDIA, game->disctype == 0x12 ? "CD" : "DVD");
+    configSetStr(config, CONFIG_ITEM_MEDIA, game->disctype == SCECdPS2CD ? "CD" : "DVD");
     configSetStr(config, CONFIG_ITEM_STARTUP, game->startup);
 
     return config;
@@ -461,12 +427,13 @@ static int hddGetImage(char *folder, int isRelative, char *value, char *suffix, 
 {
     char path[256];
     if (isRelative)
-        sprintf(path, "%s%s/%s_%s", hddPrefix, folder, value, suffix);
+        snprintf(path, sizeof(path), "%s%s/%s_%s", hddPrefix, folder, value, suffix);
     else
-        sprintf(path, "%s%s_%s", folder, value, suffix);
+        snprintf(path, sizeof(path), "%s%s_%s", folder, value, suffix);
     return texDiscoverLoad(resultTex, path, -1, psm);
 }
 
+//This may be called, even if hddInit() was not.
 static void hddCleanUp(int exception)
 {
     LOG("HDDSUPPORT CleanUp\n");
@@ -478,26 +445,166 @@ static void hddCleanUp(int exception)
             fileXioUmount(hddPrefix);
     }
 
-    hddModulesLoaded = 0;
+    //UI may have loaded modules outside of HDD mode, so deinitialize regardless of the enabled status.
+    if (hddModulesLoaded) {
+        fileXioDevctl("pfs:", PDIOC_CLOSEALL, NULL, 0, NULL, 0);
+
+        hddModulesLoaded = 0;
+    }
 }
 
-#ifdef VMC
 static int hddCheckVMC(char *name, int createSize)
 {
     return sysCheckVMC(hddPrefix, "/", name, createSize, NULL);
 }
-#endif
+
+//This may be called, even if hddInit() was not.
+static void hddShutdown(void)
+{
+    LOG("HDDSUPPORT Shutdown\n");
+
+    if (hddGameList.enabled) {
+        hddFreeHDLGamelist(&hddGames);
+        fileXioUmount(hddPrefix);
+    }
+
+    //UI may have loaded modules outside of HDD mode, so deinitialize regardless of the enabled status.
+    if (hddModulesLoaded) {
+        /* Close all files */
+        fileXioDevctl("pfs:", PDIOC_CLOSEALL, NULL, 0, NULL, 0);
+
+        //DEV9 will remain active if ETH is in use, so put the HDD in IDLE state.
+        //The HDD should still enter standby state after 21 minutes & 15 seconds, as per the ATAD defaults.
+        hddSetIdleImmediate();
+
+        //Only shut down dev9 from here, if it was initialized from here before.
+        sysShutdownDev9();
+
+        hddModulesLoaded = 0;
+    }
+}
+
+static int hddLoadGameListCache(hdl_games_list_t *cache)
+{
+    char filename[256];
+    FILE *file;
+    hdl_game_info_t *games;
+    int result, size, count;
+
+    if (!gHDDGameListCache)
+        return 1;
+
+    hddFreeHDLGamelist(cache);
+
+    sprintf(filename, "%s/games.bin", hddPrefix);
+    file = fopen(filename, "rb");
+    if (file != NULL)
+    {
+        fseek(file, 0, SEEK_END);
+        size = ftell(file);
+        rewind(file);
+
+        count = size / sizeof(hdl_game_info_t);
+        if (count > 0)
+        {
+            games = memalign(64, count * sizeof(hdl_game_info_t));
+            if (games != NULL)
+            {
+                if (fread(games, sizeof(hdl_game_info_t), count, file) == count)
+                {
+                    cache->count = count;
+                    cache->games = games;
+                    LOG("hddLoadGameListCache: %d games loaded.\n", count);
+                    result = 0;
+                } else {
+                    LOG("hddLoadGameListCache: I/O error.\n");
+                    free(games);
+                    result = EIO;
+                }
+            } else {
+                LOG("hddLoadGameListCache: failed to allocate memory.\n");
+                result = ENOMEM;
+            }
+        } else {
+            result = -1; //Empty file
+        }
+
+        fclose(file);
+    } else {
+        result = ENOENT;
+    }
+
+    return result;
+}
+
+static int hddUpdateGameListCache(hdl_games_list_t *cache, hdl_games_list_t *game_list)
+{
+    char filename[256];
+    FILE *file;
+    int result, i, j, modified;
+
+    if (!gHDDGameListCache)
+        return 1;
+
+    if (cache->count > 0)
+    {
+        modified = 0;
+        for(i = 0; i < cache->count; i++)
+        {
+            for (j = 0; j < game_list->count; j++)
+            {
+                if (strncmp(cache->games[i].partition_name, game_list->games[j].partition_name, APA_IDMAX+1) == 0)
+                    break;
+            }
+
+            if (j == game_list->count)
+            {
+                LOG("hddUpdateGameListCache: game added.\n");
+                modified = 1;
+                break;
+            }
+        }
+
+        if ((!modified) && (game_list->count != cache->count))
+        {
+            LOG("hddUpdateGameListCache: game removed.\n");
+            modified = 1;
+        }
+    } else {
+        modified = (game_list->count > 0) ? 1 : 0;
+    }
+
+    if (!modified)
+        return 0;
+    LOG("hddUpdateGameListCache: caching new game list.\n");
+
+    sprintf(filename, "%s/games.bin", hddPrefix);
+    if (game_list->count > 0)
+    {
+        file = fopen(filename, "wb");
+        if (file != NULL)
+        {
+            result = (fwrite(game_list->games, sizeof(hdl_game_info_t), game_list->count, file) == game_list->count) ? 0 : EIO;
+            fclose(file);
+        } else {
+            result = EIO;
+        }
+    } else {
+        //Last game deleted.
+        remove(filename);
+        result = 0;
+    }
+
+    return result;
+}
+
+static void hddGetAppsPath(char *path, int max)
+{
+    snprintf(path, max, "%s/APPS", hddPrefix);
+}
 
 static item_list_t hddGameList = {
-    HDD_MODE, 0, MODE_FLAG_COMPAT_DMA, MENU_MIN_INACTIVE_FRAMES, HDD_MODE_UPDATE_DELAY, "HDD Games", _STR_HDD_GAMES, &hddInit, &hddNeedsUpdate, &hddUpdateGameList,
-#ifdef __CHILDPROOF
-    &hddGetGameCount, &hddGetGame, &hddGetGameName, &hddGetGameNameLength, &hddGetGameStartup, NULL, NULL,
-#else
+    HDD_MODE, 0, 0, MODE_FLAG_COMPAT_DMA, MENU_MIN_INACTIVE_FRAMES, HDD_MODE_UPDATE_DELAY, "HDD Games", _STR_HDD_GAMES, &hddGetAppsPath, &hddInit, &hddNeedsUpdate, &hddUpdateGameList,
     &hddGetGameCount, &hddGetGame, &hddGetGameName, &hddGetGameNameLength, &hddGetGameStartup, &hddDeleteGame, &hddRenameGame,
-#endif
-#ifdef VMC
-    &hddLaunchGame, &hddGetConfig, &hddGetImage, &hddCleanUp, &hddCheckVMC, HDD_ICON
-#else
-    &hddLaunchGame, &hddGetConfig, &hddGetImage, &hddCleanUp, HDD_ICON
-#endif
+    &hddLaunchGame, &hddGetConfig, &hddGetImage, &hddCleanUp, &hddShutdown, &hddCheckVMC, HDD_ICON
 };

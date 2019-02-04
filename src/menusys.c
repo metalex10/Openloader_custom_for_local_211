@@ -17,11 +17,16 @@
 #include "include/ioman.h"
 #include <assert.h>
 
+#include "include/sound.h"
+#include <audsrv.h>
+
 enum MENU_IDs {
     MENU_SETTINGS = 0,
     MENU_GFX_SETTINGS,
+    MENU_AUDIO_SETTINGS,
     MENU_NET_CONFIG,
     MENU_NET_UPDATE,
+    MENU_PARENTAL_LOCK,
     MENU_SAVE_CHANGES,
     MENU_START_HDL,
     MENU_ABOUT,
@@ -36,6 +41,8 @@ static menu_list_t *selected_item;
 static int actionStatus;
 static int itemConfigId;
 static config_set_t *itemConfig;
+
+static u8 parentalLockCheckEnabled = 1;
 
 // "main menu submenu"
 static submenu_list_t *mainMenu;
@@ -108,15 +115,15 @@ static void menuInitMainMenu(void)
         submenuDestroy(&mainMenu);
 
 // initialize the menu
-#ifndef __CHILDPROOF
     submenuAppendItem(&mainMenu, -1, NULL, MENU_SETTINGS, _STR_SETTINGS);
     submenuAppendItem(&mainMenu, -1, NULL, MENU_GFX_SETTINGS, _STR_GFX_SETTINGS);
+    submenuAppendItem(&mainMenu, -1, NULL, MENU_AUDIO_SETTINGS, _STR_AUDIO_SETTINGS);
     submenuAppendItem(&mainMenu, -1, NULL, MENU_NET_CONFIG, _STR_NETCONFIG);
     submenuAppendItem(&mainMenu, -1, NULL, MENU_NET_UPDATE, _STR_NET_UPDATE);
+    submenuAppendItem(&mainMenu, -1, NULL, MENU_PARENTAL_LOCK, _STR_PARENLOCKCONFIG);
     submenuAppendItem(&mainMenu, -1, NULL, MENU_SAVE_CHANGES, _STR_SAVE_CHANGES);
     if (gHDDStartMode && gEnableWrite) // enabled at all?
         submenuAppendItem(&mainMenu, -1, NULL, MENU_START_HDL, _STR_STARTHDL);
-#endif
     submenuAppendItem(&mainMenu, -1, NULL, MENU_ABOUT, _STR_ABOUT);
     submenuAppendItem(&mainMenu, -1, NULL, MENU_EXIT, _STR_EXIT);
     submenuAppendItem(&mainMenu, -1, NULL, MENU_POWER_OFF, _STR_POWEROFF);
@@ -428,6 +435,7 @@ static void menuNextH()
     if (selected_item->next != NULL) {
         selected_item = selected_item->next;
         itemConfigId = -1;
+        sfxPlay(SFX_CURSOR);
     }
 }
 
@@ -436,6 +444,40 @@ static void menuPrevH()
     if (selected_item->prev != NULL) {
         selected_item = selected_item->prev;
         itemConfigId = -1;
+        sfxPlay(SFX_CURSOR);
+    }
+}
+
+static void menuFirstPage()
+{
+    submenu_list_t *cur = selected_item->item->current;
+    if (cur) {
+        if (cur->prev) {
+            sfxPlay(SFX_CURSOR);
+        }
+
+        selected_item->item->current = selected_item->item->submenu;
+        selected_item->item->pagestart = selected_item->item->current;
+    }
+}
+
+static void menuLastPage()
+{
+    submenu_list_t *cur = selected_item->item->current;
+    if (cur) {
+        if (cur->next) {
+            sfxPlay(SFX_CURSOR);
+        }
+        while (cur->next)
+            cur = cur->next; // go to end
+
+        selected_item->item->current = cur;
+
+        int itms = ((items_list_t *)gTheme->itemsList->extended)->displayedItems;
+        while (--itms && cur->prev) // and move back to have a full page
+            cur = cur->prev;
+
+        selected_item->item->pagestart = cur;
     }
 }
 
@@ -445,6 +487,7 @@ static void menuNextV()
 
     if (cur && cur->next) {
         selected_item->item->current = cur->next;
+        sfxPlay(SFX_CURSOR);
 
         // if the current item is beyond the page start, move the page start one page down
         cur = selected_item->item->pagestart;
@@ -457,6 +500,9 @@ static void menuNextV()
 
         selected_item->item->pagestart = selected_item->item->current;
     }
+    else { //wrap to start
+        menuFirstPage();
+    }
 }
 
 static void menuPrevV()
@@ -465,6 +511,7 @@ static void menuPrevV()
 
     if (cur && cur->prev) {
         selected_item->item->current = cur->prev;
+        sfxPlay(SFX_CURSOR);
 
         // if the current item is on the page start, move the page start one page up
         if (selected_item->item->pagestart == cur) {
@@ -473,19 +520,27 @@ static void menuPrevV()
                 selected_item->item->pagestart = selected_item->item->pagestart->prev;
         }
     }
+    else { //wrap to end
+        menuLastPage();
+    }
 }
 
 static void menuNextPage()
 {
     submenu_list_t *cur = selected_item->item->pagestart;
 
-    if (cur) {
+    if (cur && cur->next) {
         int itms = ((items_list_t *)gTheme->itemsList->extended)->displayedItems + 1;
+        sfxPlay(SFX_CURSOR);
+
         while (--itms && cur->next)
             cur = cur->next;
 
         selected_item->item->current = cur;
         selected_item->item->pagestart = selected_item->item->current;
+    }
+    else { //wrap to start
+        menuFirstPage();
     }
 }
 
@@ -493,36 +548,18 @@ static void menuPrevPage()
 {
     submenu_list_t *cur = selected_item->item->pagestart;
 
-    if (cur) {
+    if (cur && cur->prev) {
         int itms = ((items_list_t *)gTheme->itemsList->extended)->displayedItems + 1;
+        sfxPlay(SFX_CURSOR);
+
         while (--itms && cur->prev)
             cur = cur->prev;
 
         selected_item->item->current = cur;
         selected_item->item->pagestart = selected_item->item->current;
     }
-}
-
-static void menuFirstPage()
-{
-    selected_item->item->current = selected_item->item->submenu;
-    selected_item->item->pagestart = selected_item->item->current;
-}
-
-static void menuLastPage()
-{
-    submenu_list_t *cur = selected_item->item->current;
-    if (cur) {
-        while (cur->next)
-            cur = cur->next; // go to end
-
-        selected_item->item->current = cur;
-
-        int itms = ((items_list_t *)gTheme->itemsList->extended)->displayedItems;
-        while (--itms && cur->prev) // and move back to have a full page
-            cur = cur->prev;
-
-        selected_item->item->pagestart = cur;
+    else { //wrap to end
+        menuLastPage();
     }
 }
 
@@ -573,6 +610,56 @@ void menuRenderMenu()
     guiDrawIconAndText(gSelectButton == KEY_CIRCLE ? CROSS_ICON : CIRCLE_ICON, _STR_GAMES_LIST, gTheme->fonts[0], 500, 417, gTheme->selTextColor);
 }
 
+int menuSetParentalLockCheckState(int enabled)
+{
+   int wasEnabled;
+
+   wasEnabled = parentalLockCheckEnabled;
+   parentalLockCheckEnabled = enabled ? 1 : 0;
+
+   return wasEnabled;
+}
+
+int menuCheckParentalLock(void)
+{
+    const char *parentalLockPassword;
+    char password[CONFIG_KEY_VALUE_LEN];
+    int result;
+
+    result = 0; //Default to unlocked.
+    if (parentalLockCheckEnabled) {
+       config_set_t *configOPL = configGetByType(CONFIG_OPL);
+
+       //Prompt for password, only if one was set.
+       if (configGetStr(configOPL, CONFIG_OPL_PARENTAL_LOCK_PWD, &parentalLockPassword) && (parentalLockPassword[0] != '\0'))
+       {
+           password[0] = '\0';
+           if(diaShowKeyb(password, CONFIG_KEY_VALUE_LEN, 1, _l(_STR_PARENLOCK_ENTER_PASSWORD_TITLE)))
+           {
+               if (strncmp(parentalLockPassword, password, CONFIG_KEY_VALUE_LEN) == 0)
+               {
+                   result = 0;
+                   parentalLockCheckEnabled = 0; //Stop asking for the password.
+               } else if (strncmp(OPL_PARENTAL_LOCK_MASTER_PASS, password, CONFIG_KEY_VALUE_LEN) == 0) {
+                   guiMsgBox(_l(_STR_PARENLOCK_DISABLE_WARNING), 0, NULL);
+
+                   configRemoveKey(configOPL, CONFIG_OPL_PARENTAL_LOCK_PWD);
+                   saveConfig(CONFIG_OPL, 1);
+
+                   result = 0;
+                   parentalLockCheckEnabled = 0; //Stop asking for the password.
+               } else {
+                   guiMsgBox(_l(_STR_PARENLOCK_PASSWORD_INCORRECT), 0, NULL);
+                   result = EACCES;
+               }
+           } else //User aborted.
+               result = EACCES;
+       }
+    }
+
+    return result;
+}
+
 void menuHandleInputMenu()
 {
     if (!mainMenu)
@@ -582,6 +669,7 @@ void menuHandleInputMenu()
         mainMenuCurrent = mainMenu;
 
     if (getKey(KEY_UP)) {
+        sfxPlay(SFX_CURSOR);
         if (mainMenuCurrent->prev)
             mainMenuCurrent = mainMenuCurrent->prev;
         else // rewind to the last item
@@ -590,6 +678,7 @@ void menuHandleInputMenu()
     }
 
     if (getKey(KEY_DOWN)) {
+        sfxPlay(SFX_CURSOR);
         if (mainMenuCurrent->next)
             mainMenuCurrent = mainMenuCurrent->next;
         else
@@ -600,20 +689,36 @@ void menuHandleInputMenu()
         // execute the item via looking at the id of it
         int id = mainMenuCurrent->item.id;
 
+        sfxPlay(SFX_CURSOR);
+
         if (id == MENU_SETTINGS) {
-            guiShowConfig();
+            if (menuCheckParentalLock() == 0)
+              guiShowConfig();
         } else if (id == MENU_GFX_SETTINGS) {
-            guiShowUIConfig();
+            if (menuCheckParentalLock() == 0)
+              guiShowUIConfig();
+        } else if (id == MENU_AUDIO_SETTINGS) {
+            if (menuCheckParentalLock() == 0)
+              guiShowAudioConfig();
         } else if (id == MENU_NET_CONFIG) {
-            guiShowNetConfig();
+            if (menuCheckParentalLock() == 0)
+              guiShowNetConfig();
         } else if (id == MENU_NET_UPDATE) {
-            guiShowNetCompatUpdate();
+            if (menuCheckParentalLock() == 0)
+              guiShowNetCompatUpdate();
+        } else if (id == MENU_PARENTAL_LOCK) {
+            if (menuCheckParentalLock() == 0)
+              guiShowParentalLockConfig();
         } else if (id == MENU_SAVE_CHANGES) {
-            saveConfig(CONFIG_OPL | CONFIG_NETWORK, 1);
+            if (menuCheckParentalLock() == 0) {
+              saveConfig(CONFIG_OPL | CONFIG_NETWORK, 1);
+              menuSetParentalLockCheckState(1); //Re-enable parental lock check.
+            }
         } else if (id == MENU_START_HDL) {
-            handleHdlSrv();
+            if (menuCheckParentalLock() == 0)
+              handleHdlSrv();
         } else if (id == MENU_ABOUT) {
-            guiShowAbout();
+              guiShowAbout();
         } else if (id == MENU_EXIT) {
             if (guiMsgBox(_l(_STR_CONFIRMATION_EXIT), 1, NULL))
                 sysExecExit();

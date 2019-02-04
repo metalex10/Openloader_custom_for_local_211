@@ -10,7 +10,6 @@
 #include "oplsmb.h"
 #include "smb.h"
 #include "smstcpip.h"
-#include "dev9.h"
 #include "atad.h"
 #include "ioplib_util.h"
 #include "cdvdman.h"
@@ -36,8 +35,9 @@
 
 extern struct cdvdman_settings_smb cdvdman_settings;
 
-struct irx_export_table _exp_dev9;
-struct irx_export_table _exp_oplsmb;
+extern struct irx_export_table _exp_oplsmb;
+
+extern int smb_io_sema;
 
 static void ps2ip_init(void);
 
@@ -74,15 +74,11 @@ void smb_NegotiateProt(OplSmbPwHashFunc_t hash_callback)
 
 void DeviceInit(void)
 {
-    RegisterLibraryEntries(&_exp_dev9);
-    dev9d_init();
-
     RegisterLibraryEntries(&_exp_oplsmb);
 }
 
 void DeviceDeinit(void)
 {
-    smb_Disconnect();
 }
 
 void DeviceFSInit(void)
@@ -118,6 +114,21 @@ void DeviceFSInit(void)
     }
 }
 
+void DeviceLock(void)
+{
+    WaitSema(smb_io_sema);
+}
+
+void DeviceUnmount(void)
+{
+    smb_CloseAll();
+    smb_Disconnect();
+}
+
+void DeviceStop(void)
+{
+}
+
 int DeviceReadSectors(u32 lsn, void *buffer, unsigned int sectors)
 {
     register u32 r, sectors_to_read, lbound, ubound, nlsn, offslsn;
@@ -143,6 +154,7 @@ int DeviceReadSectors(u32 lsn, void *buffer, unsigned int sectors)
             smb_ReadCD(offslsn, sectors_to_read, &p[r], i);
 
             r += sectors_to_read << 11;
+            offslsn += sectors_to_read;
             sectors_to_read = sectors;
             lsn = nlsn;
         }

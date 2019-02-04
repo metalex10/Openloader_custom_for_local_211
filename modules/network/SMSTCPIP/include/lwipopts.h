@@ -2,7 +2,26 @@
 #define __LWIPOPTS_H__
 
 #define LWIP_CALLBACK_API 1
+
+/* ---------- Core locking ---------- */
+/**
+ * LWIP_TCPIP_CORE_LOCKING_INPUT: when LWIP_TCPIP_CORE_LOCKING is enabled,
+ * this lets tcpip_input() grab the mutex for input packets as well,
+ * instead of allocating a message and passing it to tcpip_thread.
+ *
+ * ATTENTION: this does not work when tcpip_input() is called from
+ * interrupt context!
+ */
+//#define LWIP_TCPIP_CORE_LOCKING_INPUT 1	//Not supported because of the in-game SMAP driver's design (will deadlock).
+
 /* ---------- Memory options ---------- */
+/**
+ * MEM_LIBC_MALLOC==1: Use malloc/free/realloc provided by your C-library
+ * instead of the lwip internal allocator. Can save code size if you
+ * already use it.
+ */
+#define MEM_LIBC_MALLOC 1
+
 /* MEM_ALIGNMENT: should be set to the alignment of the CPU for which
    lwIP is compiled. 4 byte alignment -> define MEM_ALIGNMENT to 4, 2
    byte alignment -> define MEM_ALIGNMENT to 2. */
@@ -174,6 +193,15 @@ a lot of data that needs to be copied, this should be set high. */
 #endif
 #define ARP_QUEUEING 1
 
+/**
+ * If defined to 1, cache entries are updated or added for every kind of ARP traffic
+ * or broadcast IP traffic. Recommended for routers.
+ * If defined to 0, only existing cache entries are updated. Entries are added when
+ * lwIP is sending to them. Recommended for embedded devices.
+ */
+//Do not always insert ARP entries, as the ARP table is small.
+#define ETHARP_ALWAYS_INSERT 0
+
 /* ---------- IP options ---------- */
 /* Define IP_FORWARD to 1 if you wish to have the ability to forward
    IP packets across network interfaces. If you are going to run lwIP
@@ -198,9 +226,10 @@ a lot of data that needs to be copied, this should be set high. */
 
 #define LWIP_DHCP 1
 
-/* 1 if you want to do an ARP check on the offered address
-   (recommended). */
-#define DHCP_DOES_ARP_CHECK 1
+/**
+ * DHCP_DOES_ARP_CHECK==1: Do an ARP check on the offered address.
+ */
+#define DHCP_DOES_ARP_CHECK	0	//Don't do the ARP check because an IP address would be first required.
 
 #else
 
@@ -287,4 +316,41 @@ a lot of data that needs to be copied, this should be set high. */
 //	One should check performance penalty or improvement by activating any combination
 //	of these three options. The only one which is standard is TCP_NODELAY.
 //	By default, everything is not active.
+
+/*
+   --------------------------------------
+   ---------- Checksum options ----------
+   --------------------------------------
+*/
+#ifdef INGAME_DRIVER
+//Disable all higher-level checksum verification mechanisms for performance, relying on the MAC-level checksum.
+/**
+ * CHECKSUM_CHECK_IP==1: Check checksums in software for incoming IP packets.
+ */
+#if !defined CHECKSUM_CHECK_IP
+#define CHECKSUM_CHECK_IP               0
+#endif
+
+/**
+ * CHECKSUM_CHECK_UDP==1: Check checksums in software for incoming UDP packets.
+ */
+#if !defined CHECKSUM_CHECK_UDP
+#define CHECKSUM_CHECK_UDP              0
+#endif
+
+/**
+ * CHECKSUM_CHECK_TCP==1: Check checksums in software for incoming TCP packets.
+ */
+#if !defined CHECKSUM_CHECK_TCP
+#define CHECKSUM_CHECK_TCP              0
+#endif
+
+/**
+ * CHECKSUM_CHECK_ICMP==1: Check checksums in software for incoming ICMP packets.
+ */
+#if !defined CHECKSUM_CHECK_ICMP
+#define CHECKSUM_CHECK_ICMP             0
+#endif
+#endif
+
 #endif /* __LWIPOPTS_H__ */

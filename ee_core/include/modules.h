@@ -3,6 +3,7 @@ enum OPL_MODULE_ID {
     OPL_MODULE_ID_UDNL = 1,
     OPL_MODULE_ID_IOPRP,
     OPL_MODULE_ID_IMGDRV,
+    OPL_MODULE_ID_RESETSPU,
 
     //USB mode modules
     OPL_MODULE_ID_USBD,
@@ -15,11 +16,16 @@ enum OPL_MODULE_ID {
     //VMC module
     OPL_MODULE_ID_MCEMU,
 
+    OPL_MODULE_ID_PADEMU,
+
     //Debugging modules
     OPL_MODULE_ID_UDPTTY,
     OPL_MODULE_ID_IOPTRAP,
     OPL_MODULE_ID_DRVTIF,
     OPL_MODULE_ID_TIFINET,
+
+    //Special patches
+    OPL_MODULE_ID_IOP_PATCH,
 
     OPL_MODULE_ID_COUNT
 };

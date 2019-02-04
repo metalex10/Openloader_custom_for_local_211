@@ -30,7 +30,7 @@ static char *internalEnglish[LANG_STR_COUNT] = {
     "Theme",
     "Language",
     "The system will be powered off.",
-    "Exit to Browser/OSDSYS?",
+    "Exit to Browser?",
     "Cancel updating?",
     "%d: HardDisk Drive not detected",
     "%d: HardDisk Drive not formatted",
@@ -51,7 +51,7 @@ static char *internalEnglish[LANG_STR_COUNT] = {
     "Circle",
     "Cross",
     "Games List",
-    "Game settings",
+    "Game Settings",
     "Remove all settings",
     "Removed all keys for the game",
     "Scrolling",
@@ -110,7 +110,7 @@ static char *internalEnglish[LANG_STR_COUNT] = {
     "Rename",
     "Delete",
     "Run",
-    "Display settings",
+    "Display Settings",
     "Enable write operations",
     "Check USB game fragmentation",
     "Remember last played game",
@@ -125,8 +125,8 @@ static char *internalEnglish[LANG_STR_COUNT] = {
     "Skip Videos",
     "Emulate DVD-DL",
     "Disable IGR",
-    "High module storage",
-    "Hide DEV9 module",
+    "Unused",
+    "Unused",
     "Changing the size will reformat the VMC",
     "Create",
     "Start",
@@ -142,7 +142,7 @@ static char *internalEnglish[LANG_STR_COUNT] = {
     "VMC file exist",
     "Invalid VMC file, size is incorrect",
     "VMC file need to be created",
-    "Error with VMC %s, continue with physical MC (slot %d) ?",
+    "Error accessing VMC %s. Continue with the Memory Card in slot %d?",
     "Automatic refresh",
     "About",
     "Coders",
@@ -193,11 +193,13 @@ static char *internalEnglish[LANG_STR_COUNT] = {
     "Horizontal Adjustment",
     "V-POS",
     "Vertical Adjustment",
+    "Overscan",
+    "Overscan Adjustment",
     "FMV Skip",
     "Skips Full Motion Videos",
     "Cheat Settings",
     "Enable PS2RD Cheat Engine",
-    "Lets PS2RD Cheat Engine patch your games",
+    "Lets PS2RD Cheat Engine patch your game",
     "PS2RD Cheat Engine Mode",
     "Auto-select or Select game cheats",
     "Auto-select cheats",
@@ -219,6 +221,60 @@ static char *internalEnglish[LANG_STR_COUNT] = {
     "Value in second(s), 0 to disable auto start",
     "PS2 Logo",
     "(Only displayed for a valid disc logo which matches the console's region)",
+    "Configure PADEMU",
+    "Pad Emulator Settings",
+    "Enable PadEmulator",
+    "Turns on/off PadEmulator for selected game.",
+    "Pad Emulator mode",
+    "Select Pad Emulator mode.",
+    "DualShock3/4 USB",
+    "DualShock3/4 BT",
+    "Settings for port:",
+    "Select Pad Emulator port for settings.",
+    "Enable emulation",
+    "Turns on/off Pad Emulator for selected port.",
+    "Enable vibration",
+    "Turns on/off vibration for Pad Emulator selected port.",
+    "Usb bluetooth adapter mac address:",
+    "DS Controller paired to mac address:",
+    "Pair",
+    "Pair DS Controller",
+    "Pair DS Controller with bluetooth adapter mac address.",
+    "Not connected",
+    "Bluetooth adapter information",
+    "Shows more information and supported features",
+    "HCI Version:",
+    "LMP Version:",
+    "Manufacturer ID:",
+    "Support features:",
+    "Yes",
+    "No",
+    "Bluetooth adapter should be fully compatible with DS3/DS4 controllers.",
+    "Bluetooth adapter may not work correctly with DS3/DS4 controllers.",
+    "Enable Multitap emulation",
+    "Turns on/off Multitap emulation for selected game.",
+    "Multitap emulator on port",
+    "Select port for Multitap emulation.",
+    "Disable workaround for fake ds3",
+    "Some fake ds3s need workaround, this option will disable it.",
+    "Emulate FIELD flipping",
+    "Fix for games that glitch under progressive video modes.",
+    "Parental Lock Settings",
+    "Parental Lock Password",
+    "Leave blank to disable the parental lock.",
+    "Enter Parental Lock Password",
+    "Parental lock password incorrect.",
+    "Parental lock disabled.",
+    "Build Options:",
+    "Error - this password cannot be used.",
+    "VMC %s file is fragmented. Continue with Memory Card in slot %d?",
+    "Audio Settings",
+    "Enable Sound Effects",
+    "Enable Boot Sound",
+    "Sound Effects Volume",
+    "Boot Sound Volume",
+    "Confirm video mode change?",
+    "Cache Game List (HDD)",
 };
 
 static int guiLangID = 0;
@@ -252,14 +308,16 @@ static void lngFreeFromFile(void)
 static int lngLoadFont(const char *dir, const char *name)
 {
     char path[256];
+
     snprintf(path, sizeof(path), "%s/font_%s.ttf", dir, name);
     LOG("LANG Custom TTF font path: %s\n", path);
-    if (fntLoadDefault(path) != 0) {
-        snprintf(path, sizeof(path), "%s/font_%s.otf", dir, name);
-        LOG("LANG Custom OTF font path: %s\n", path);
-        if (fntLoadDefault(path) == 0)
-            return 0;
-    }
+    if (fntLoadDefault(path) == 0)
+        return 0;
+
+    snprintf(path, sizeof(path), "%s/font_%s.otf", dir, name);
+    LOG("LANG Custom OTF font path: %s\n", path);
+    if (fntLoadDefault(path) == 0)
+        return 0;
 
     LOG("LANG cannot load font.\n");
 

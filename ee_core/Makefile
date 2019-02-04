@@ -10,22 +10,21 @@
 # Standard Makefile
 
 EE_BIN = ee_core.elf
-
-GSMCORE_EE_OBJS = obj/gsm_engine.o obj/gsm_api.o
-IGSCORE_EE_OBJS = obj/igs_api.o
-CHEATCORE_EE_OBJS = obj/cheat_engine.o obj/cheat_api.o
-
-EE_OBJS = obj/main.o obj/syshook.o obj/iopmgr.o obj/modmgr.o obj/util.o obj/patches.o obj/patches_asm.o \
-	  obj/padhook.o obj/spu.o obj/tlb.o obj/asm.o obj/crt0.o
-MAPFILE = ee_core.map
-
 EE_SRC_DIR = src/
 EE_OBJS_DIR = obj/
+
+GSMCORE_EE_OBJS = gsm_engine.o gsm_api.o dve_reg.o
+IGSCORE_EE_OBJS = igs_api.o
+CHEATCORE_EE_OBJS = cheat_engine.o cheat_api.o
+
+EE_OBJS = main.o syshook.o iopmgr.o modmgr.o util.o patches.o patches_asm.o \
+	  padhook.o cd_igr_rpc.o tlb.o asm.o crt0.o $(GSMCORE_EE_OBJS) $(CHEATCORE_EE_OBJS)
+MAPFILE = ee_core.map
 
 EE_INCS := -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include -Iinclude -I.
 EE_CFLAGS = -D_EE -Os -G0 -Wall $(EE_INCS)
 
-ifeq ($(EESIO_DEBUG),1) 
+ifeq ($(EESIO_DEBUG),1)
 EE_CFLAGS += -D__EESIO_DEBUG
 endif
 
@@ -40,63 +39,43 @@ EE_CFLAGS += -D__LOAD_DEBUG_MODULES
 	endif
 endif
 
-ifeq ($(VMC),1)
-EE_CFLAGS += -DVMC
-endif
-
-ifeq ($(GSM),1)
-EE_OBJS += $(GSMCORE_EE_OBJS)
-EE_CFLAGS += -DGSM
-endif
-
 ifeq ($(IGS),1)
 EE_OBJS += $(IGSCORE_EE_OBJS)
 EE_CFLAGS += -DIGS
-EE_LIBS += -lmc
 endif
 
-ifeq ($(CHEAT),1)
-EE_OBJS += $(CHEATCORE_EE_OBJS)
-EE_CFLAGS += -DCHEAT
-endif
+EE_OBJS := $(EE_OBJS:%=$(EE_OBJS_DIR)%)
 
-ifeq ($(IGS),1)
-EE_LDFLAGS = -nostartfiles -Tlinkfile.igs -L$(PS2SDK)/ee/lib -s -Wl,-Map,$(MAPFILE)
-else
-EE_LDFLAGS = -nostartfiles -Tlinkfile -L$(PS2SDK)/ee/lib -s -Wl,-Map,$(MAPFILE)
-endif
+EE_LDFLAGS = -nostartfiles -nostdlib -Tlinkfile -L$(PS2SDK)/ee/lib -s -Wl,-Map,$(MAPFILE)
 EE_LIBS += -lpatches
 
-ifeq ($(EESIO_DEBUG),1) 
-EE_LIBS += -lc
+ifeq ($(PADEMU),1)
+EE_CFLAGS += -DPADEMU
 endif
 
-EE_LIBS += -lkernel
-
+EE_LIBS += -lkernel-nopatch
 
 $(EE_OBJS_DIR)%.o : $(EE_SRC_DIR)%.c
-	@mkdir -p obj
+	@mkdir -p $(EE_OBJS_DIR)
 	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $< -o $@
 
 $(EE_OBJS_DIR)%.o : $(EE_SRC_DIR)%.S
-	@mkdir -p obj
+	@mkdir -p $(EE_OBJS_DIR)
 	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $< -o $@
 
 $(EE_OBJS_DIR)%.o : $(EE_SRC_DIR)%.s
-	@mkdir -p obj
+	@mkdir -p $(EE_OBJS_DIR)
 	$(EE_AS) $(EE_ASFLAGS) $< -o $@
 
 $(EE_BIN) : $(EE_OBJS)
 	$(EE_CC) $(EE_CFLAGS) $(EE_LDFLAGS) -o $(EE_BIN) $(EE_OBJS) $(EE_LIBS)
 
-all:
-	$(EE_BIN)
+all: $(EE_BIN)
 
 clean:
 	rm -f -r $(EE_OBJS_DIR) $(EE_BIN) $(MAPFILE)
 
 clean_all:
 	rm -f -r $(EE_OBJS_DIR) $(EE_BIN) $(MAPFILE)
-
 
 include $(PS2SDK)/samples/Makefile.pref

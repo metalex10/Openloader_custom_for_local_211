@@ -5,9 +5,11 @@
    */
 
 #include <stdio.h>
+#include <errno.h>
 #include <sysclib.h>
 #include "smstcpip.h"
 #include <thbase.h>
+#include <thsemap.h>
 #include <intrman.h>
 #include <sifman.h>
 
@@ -16,19 +18,10 @@
 #include "smb.h"
 #include "cdvd_config.h"
 
-#ifdef VMC_DRIVER
-#include <thsemap.h>
-
-static int io_sema = -1;
+int smb_io_sema = -1;
 
 #define WAITIOSEMA(x) WaitSema(x)
 #define SIGNALIOSEMA(x) SignalSema(x)
-#define SMBWRITE 1
-#else
-#define WAITIOSEMA(x)
-#define SIGNALIOSEMA(x)
-#define SMBWRITE 0
-#endif
 
 // !!! ps2ip exports functions pointers !!!
 extern int (*plwip_close)(int s);                                                                                                                    // #6
@@ -233,6 +226,20 @@ struct WriteAndXRequest_t
     u16 ByteCount;           // 65
 } __attribute__((packed));
 
+struct CloseRequest_t {      // size = 45
+    struct SMBHeader_t smbH; // 0
+    u8 smbWordcount;         // 36
+    u16 FID;                 // 37
+    u32 LastWrite;           // 39
+    u16 ByteCount;           // 43
+} __attribute__((packed));
+
+struct CloseResponse_t {
+    struct SMBHeader_t smbH; // 0
+    u8 smbWordcount;         // 36
+    u16 ByteCount;           // 37
+} __attribute__((packed));
+
 static server_specs_t server_specs;
 
 #define SERVER_SHARE_SECURITY_LEVEL 0
@@ -260,7 +267,6 @@ static struct ReadAndXRequest_t smb_Read_Request = {
     0,
     0};
 
-#ifdef VMC_DRIVER
 static struct WriteAndXRequest_t smb_Write_Request = {
     {0,
      SMB_MAGIC,
@@ -273,14 +279,13 @@ static struct WriteAndXRequest_t smb_Write_Request = {
     0,
     0,
     0,
-    0x01,
+    0x00,
     0,
     0,
     0,
     0x3f,
-    0 //DataOffset = 0x3f, WriteMode = 1
+    0 //DataOffset = 0x3f, WriteMode = 0
 };
-#endif
 
 static u16 UID, TID;
 static int main_socket;
@@ -375,15 +380,14 @@ int smb_NegotiateProtocol(char *SMBServerIP, int SMBServerPort, char *Username, 
     struct NegociateProtocolRequest_t *NPR = (struct NegociateProtocolRequest_t *)SMB_buf;
     register int length;
     struct in_addr dst_addr;
-#ifdef VMC_DRIVER
     iop_sema_t smp;
 
     smp.initial = 1;
     smp.max = 1;
     smp.option = 0;
     smp.attr = 1;
-    io_sema = CreateSema(&smp);
-#endif
+    smb_io_sema = CreateSema(&smp);
+
     dst_addr.s_addr = pinet_addr(SMBServerIP);
 
     // Opening TCP session
@@ -612,7 +616,7 @@ int smb_OpenAndX(char *filename, u16 *FID, int Write)
     struct OpenAndXRequest_t *OR = (struct OpenAndXRequest_t *)SMB_buf;
     register int i, offset, CF;
 
-    WAITIOSEMA(io_sema);
+    WAITIOSEMA(smb_io_sema);
 
     mips_memset(SMB_buf, 0, sizeof(SMB_buf));
 
@@ -628,8 +632,8 @@ int smb_OpenAndX(char *filename, u16 *FID, int Write)
     OR->smbH.TID = TID;
     OR->smbWordcount = 15;
     OR->smbAndxCmd = SMB_COM_NONE; // no ANDX command
-    OR->AccessMask = (Write && (SMBWRITE)) ? 2 : 0;
-    OR->FileAttributes = (Write && (SMBWRITE)) ? EXT_ATTR_NORMAL : EXT_ATTR_READONLY;
+    OR->AccessMask = Write ? 2 : 0;
+    OR->FileAttributes = Write ? EXT_ATTR_NORMAL : EXT_ATTR_READONLY;
     OR->CreateOptions = 1;
 
     offset = 0;
@@ -651,11 +655,17 @@ int smb_OpenAndX(char *filename, u16 *FID, int Write)
 
     // check sanity of SMB header
     if (ORsp->smbH.Magic != SMB_MAGIC)
+    {
+        SIGNALIOSEMA(smb_io_sema);
         return -1;
+    }
 
     // check there's no error
     if (ORsp->smbH.Eclass != STATUS_SUCCESS)
+    {
+        SIGNALIOSEMA(smb_io_sema);
         return -1000;
+    }
 
     *FID = ORsp->FID;
 
@@ -663,14 +673,61 @@ int smb_OpenAndX(char *filename, u16 *FID, int Write)
     smb_Read_Request.smbH.UID = UID;
     smb_Read_Request.smbH.TID = TID;
 
-#ifdef VMC_DRIVER
     smb_Write_Request.smbH.UID = UID;
     smb_Write_Request.smbH.TID = TID;
-#endif
 
-    SIGNALIOSEMA(io_sema);
+    SIGNALIOSEMA(smb_io_sema);
 
     return 1;
+}
+
+//-------------------------------------------------------------------------
+//Do not call WaitSema() from this function because it would have been already called.
+int smb_Close(int FID)
+{
+    int r;
+    struct CloseRequest_t *CR = (struct CloseRequest_t *)SMB_buf;
+
+//  WAITIOSEMA(smb_io_sema);
+
+    mips_memset(SMB_buf, 0, sizeof(SMB_buf));
+
+    CR->smbH.Magic = SMB_MAGIC;
+    CR->smbH.Cmd = SMB_COM_CLOSE;
+    CR->smbH.Flags = SMB_FLAGS_CANONICAL_PATHNAMES;
+    CR->smbH.Flags2 = SMB_FLAGS2_KNOWS_LONG_NAMES | SMB_FLAGS2_32BIT_STATUS;
+    CR->smbH.UID = (u16)UID;
+    CR->smbH.TID = (u16)TID;
+    CR->smbWordcount = 3;
+    CR->FID = (u16)FID;
+
+    rawTCP_SetSessionHeader(41);
+    r = GetSMBServerReply();
+    if (r <= 0)
+    {
+//      SIGNALIOSEMA(smb_io_sema);
+        return -EIO;
+    }
+
+    struct CloseResponse_t *CRsp = (struct CloseResponse_t *)SMB_buf;
+
+    // check sanity of SMB header
+    if (CRsp->smbH.Magic != SMB_MAGIC)
+    {
+//      SIGNALIOSEMA(smb_io_sema);
+        return -EIO;
+    }
+
+    // check there's no error
+    if ((CRsp->smbH.Eclass | (CRsp->smbH.Ecode << 16)) != STATUS_SUCCESS)
+    {
+//      SIGNALIOSEMA(smb_io_sema);
+        return -EIO;
+    }
+
+//  SIGNALIOSEMA(smb_io_sema);
+
+    return 0;
 }
 
 //-------------------------------------------------------------------------
@@ -680,7 +737,7 @@ int smb_ReadFile(u16 FID, u32 offsetlow, u32 offsethigh, void *readbuf, u16 nbyt
 
     struct ReadAndXRequest_t *RR = &smb_Read_Request;
 
-    WAITIOSEMA(io_sema);
+    WAITIOSEMA(smb_io_sema);
 
     RR->FID = FID;
     RR->OffsetLow = offsetlow;
@@ -702,18 +759,17 @@ receive:
         rcv_size += pkt_size;
     }
 
-    SIGNALIOSEMA(io_sema);
+    SIGNALIOSEMA(smb_io_sema);
 
     return 1;
 }
 
-#ifdef VMC_DRIVER
 //-------------------------------------------------------------------------
 int smb_WriteFile(u16 FID, u32 offsetlow, u32 offsethigh, void *writebuf, u16 nbytes)
 {
     struct WriteAndXRequest_t *WR = (struct WriteAndXRequest_t *)SMB_buf;
 
-    WAITIOSEMA(io_sema);
+    WAITIOSEMA(smb_io_sema);
 
     mips_memcpy(WR, &smb_Write_Request, sizeof(struct WriteAndXRequest_t));
 
@@ -730,11 +786,10 @@ int smb_WriteFile(u16 FID, u32 offsetlow, u32 offsethigh, void *writebuf, u16 nb
     rawTCP_SetSessionHeader(sizeof(struct WriteAndXRequest_t) - 4 + nbytes);
     GetSMBServerReply();
 
-    SIGNALIOSEMA(io_sema);
+    SIGNALIOSEMA(smb_io_sema);
 
     return 1;
 }
-#endif
 
 //-------------------------------------------------------------------------
 int smb_ReadCD(unsigned int lsn, unsigned int nsectors, void *buf, int part_num)
@@ -759,6 +814,15 @@ int smb_ReadCD(unsigned int lsn, unsigned int nsectors, void *buf, int part_num)
     }
 
     return 1;
+}
+
+void smb_CloseAll(void)
+{
+    int i;
+
+    for (i = 0; i < cdvdman_settings.common.NumParts; i++) {
+        smb_Close(cdvdman_settings.FIDs[i]);
+    }
 }
 
 //-------------------------------------------------------------------------

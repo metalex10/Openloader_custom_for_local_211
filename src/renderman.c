@@ -17,286 +17,142 @@
 GSGLOBAL *gsGlobal;
 s32 guiThreadID;
 
-/** Helper texture list */
-struct rm_texture_list_t
-{
-    GSTEXTURE *txt;
-    GSCLUT *clut;
-    struct rm_texture_list_t *next;
-};
-
-static struct rm_texture_list_t *uploadedTextures = NULL;
-
 static int order;
-static enum rm_vmode vmode = RM_VMODE_AUTO;
+static short int vmode = -1;
+static u8 hires = 0;
+static u8 guiWakeupCount;
+static int vsync_id = -1;
 
-#define NUM_RM_VMODES 6
+#define NUM_RM_VMODES 12
+#define RM_VMODE_AUTO 0
 
 // RM Vmode -> GS Vmode conversion table
 struct rm_mode
 {
     char mode;
     char hsync; //In KHz
+    short int width;
     short int height;
+    short int passes;
+    short int VCK;
+    short int interlace;
+    short int field;
+    short int aratio;
+    short int PAR1; // Pixel Aspect Ratio 1 (For video modes with non-square pixels, like PAL/NTSC)
+    short int PAR2; // Pixel Aspect Ratio 2 (For video modes with non-square pixels, like PAL/NTSC)
 };
 
 static struct rm_mode rm_mode_table[NUM_RM_VMODES] = {
-    {-1, 16, -1},                  // AUTO
-    {GS_MODE_PAL, 16, 512},        // PAL@50Hz
-    {GS_MODE_NTSC, 16, 448},       // NTSC@60Hz
-    {GS_MODE_DTV_480P, 31, 448},   // DTV480P@60Hz
-    {GS_MODE_DTV_576P, 31, 512},   // DTV576P@50Hz
-    {GS_MODE_VGA_640_60, 31, 480}, // VGA640x480@60Hz
+    // 24 bit color mode with black borders
+    {-1,                 16,  640,   -1,  1, 4, GS_INTERLACED,    GS_FIELD, RM_ARATIO_4_3,  1,  1}, // AUTO
+    {GS_MODE_PAL,        16,  640,  512,  1, 4, GS_INTERLACED,    GS_FIELD, RM_ARATIO_4_3, 11, 10}, // PAL@50Hz
+    {GS_MODE_NTSC,       16,  640,  448,  1, 4, GS_INTERLACED,    GS_FIELD, RM_ARATIO_4_3, 54, 59}, // NTSC@60Hz
+    {GS_MODE_DTV_480P,   31,  640,  448,  1, 2, GS_NONINTERLACED, GS_FRAME, RM_ARATIO_4_3,  1,  1}, // DTV480P@60Hz
+    {GS_MODE_DTV_576P,   31,  640,  512,  1, 2, GS_NONINTERLACED, GS_FRAME, RM_ARATIO_4_3,  1,  1}, // DTV576P@50Hz
+    {GS_MODE_VGA_640_60, 31,  640,  480,  1, 2, GS_NONINTERLACED, GS_FRAME, RM_ARATIO_4_3,  1,  1}, // VGA640x480@60Hz
+    // 24 bit color mode full screen, multi-pass (2 passes, HIRES)
+    {GS_MODE_PAL,        16,  704,  576,  2, 4, GS_INTERLACED,    GS_FIELD, RM_ARATIO_4_3, 11, 10}, // PAL@50Hz
+    {GS_MODE_NTSC,       16,  704,  480,  2, 4, GS_INTERLACED,    GS_FIELD, RM_ARATIO_4_3, 54, 59}, // NTSC@60Hz
+    {GS_MODE_DTV_480P,   31,  704,  480,  2, 2, GS_NONINTERLACED, GS_FRAME, RM_ARATIO_4_3,  1,  1}, // DTV480P@60Hz
+    {GS_MODE_DTV_576P,   31,  704,  576,  2, 2, GS_NONINTERLACED, GS_FRAME, RM_ARATIO_4_3,  1,  1}, // DTV576P@50Hz
+    // 16 bit color mode full screen, multi-pass (3 passes, HIRES)
+    {GS_MODE_DTV_720P,   31, 1280,  720,  3, 1, GS_NONINTERLACED, GS_FRAME, RM_ARATIO_16_9, 1,  1}, // HDTV720P@60Hz
+    {GS_MODE_DTV_1080I,  31, 1920, 1080,  3, 1, GS_INTERLACED,    GS_FRAME, RM_ARATIO_16_9, 1,  1}, // HDTV1080I@60Hz
 };
 
-static float aspectWidth;
-static float aspectHeight;
+// Display Aspect Ratio
+static int iAspectWidth = 4;
+static enum rm_aratio DAR = RM_ARATIO_4_3;
 
-// Transposition values - all rendering can be transposed (moved on screen) by these
-static float transX = 0;
-static float transY = 0;
+// Display dimensions after overscan compensation
+static int iDisplayWidth;
+static int iDisplayHeight;
+static int iDisplayXOff;
+static int iDisplayYOff;
 
-const u64 gColWhite = GS_SETREG_RGBA(0xFF, 0xFF, 0xFF, 0x00);
-const u64 gColBlack = GS_SETREG_RGBA(0x00, 0x00, 0x00, 0x00);
-const u64 gColDarker = GS_SETREG_RGBA(0x00, 0x00, 0x00, 0x60);
-const u64 gColFocus = GS_SETREG_RGBA(0xFF, 0xFF, 0xFF, 0x50);
+// Transposition values - all rendering will be transposed (moved on screen) by these
+static float transX = 0.0f;
+static float transY = 0.0f;
 
-const u64 gDefaultCol = GS_SETREG_RGBA(0x80, 0x80, 0x80, 0x80);
+// Transposition values including overscan compensation
+static float fRenderXOff = 0.0f;
+static float fRenderYOff = 0.0f;
+
+const u64 gColWhite = GS_SETREG_RGBA(0xFF, 0xFF, 0xFF, 0x80);  // Alpha 0x80 -> solid white
+const u64 gColBlack = GS_SETREG_RGBA(0x00, 0x00, 0x00, 0x80);  // Alpha 0x80 -> solid black
+const u64 gColDarker = GS_SETREG_RGBA(0x00, 0x00, 0x00, 0x60); // Alpha 0x60 -> transparent overlay color
+const u64 gColFocus = GS_SETREG_RGBA(0xFF, 0xFF, 0xFF, 0x50);  // Alpha 0x50 -> transparent overlay color
+
+const u64 gDefaultCol = GS_SETREG_RGBA(0x80, 0x80, 0x80, 0x80); // Special color for texture multiplication
 const u64 gDefaultAlpha = GS_SETREG_ALPHA(0, 1, 0, 1, 0);
 
-static float shiftYVal;
-static float (*shiftY)(float posY);
-
-static float shiftYFunc(float posY)
+void rmInvalidateTexture(GSTEXTURE *txt)
 {
-    return (int)(shiftYVal * posY);
+    gsKit_TexManager_invalidate(gsGlobal, txt);
 }
 
-static float identityFunc(float posY)
+void rmUnloadTexture(GSTEXTURE *txt)
 {
-    return posY;
-}
-
-static void rmAppendUploadedTextures(GSTEXTURE *txt)
-{
-    struct rm_texture_list_t *entry = (struct rm_texture_list_t *)malloc(sizeof(struct rm_texture_list_t));
-    entry->clut = NULL;
-    entry->txt = txt;
-    entry->next = uploadedTextures;
-    uploadedTextures = entry;
-}
-
-static void rmAppendUploadedCLUTs(GSCLUT *clut)
-{
-    struct rm_texture_list_t *entry = (struct rm_texture_list_t *)malloc(sizeof(struct rm_texture_list_t));
-    entry->txt = NULL;
-    entry->clut = clut;
-    entry->next = uploadedTextures;
-    uploadedTextures = entry;
-}
-
-static int rmClutSize(GSCLUT *clut, u32 *size, u32 *w, u32 *h)
-{
-    switch (clut->PSM) {
-        case GS_PSM_T4:
-            *w = 8;
-            *h = 2;
-            break;
-        case GS_PSM_T8:
-            *w = 16;
-            *h = 16;
-            break;
-        default:
-            return 0;
-    };
-
-    switch (clut->ClutPSM) {
-        case GS_PSM_CT32:
-            *size = (*w) * (*h) * 4;
-            break;
-        case GS_PSM_CT24:
-            *size = (*w) * (*h) * 4;
-            break;
-        case GS_PSM_CT16:
-            *size = (*w) * (*h) * 2;
-            break;
-        case GS_PSM_CT16S:
-            *size = (*w) * (*h) * 2;
-            break;
-        default:
-            return 0;
-    }
-
-    return 1;
-}
-
-static int rmUploadClut(GSCLUT *clut)
-{
-    if (clut->VramClut && clut->VramClut != GSKIT_ALLOC_ERROR) // already uploaded
-        return 1;
-
-    u32 size;
-    u32 w, h;
-
-    if (!rmClutSize(clut, &size, &w, &h))
-        return 0;
-
-    size = (-GS_VRAM_BLOCKSIZE_256) & (size + GS_VRAM_BLOCKSIZE_256 - 1);
-
-    // too large to fit VRAM with the currently allocated space?
-    if (gsGlobal->CurrentPointer + size >= __VRAM_SIZE) {
-        if (size >= __VRAM_SIZE) {
-            // Only log this if the allocation is too large itself
-            LOG("RENDERMAN Requested clut allocation is bigger than VRAM!\n");
-            // We won't allocate this, it's too large
-            clut->VramClut = GSKIT_ALLOC_ERROR;
-            return 0;
-        }
-
-        rmFlush();
-    }
-
-    clut->VramClut = gsGlobal->CurrentPointer;
-    gsGlobal->CurrentPointer += size;
-
-    rmAppendUploadedCLUTs(clut);
-
-    SyncDCache(clut->Clut, (u8 *)(clut->Clut) + size);
-    gsKit_texture_send_inline(gsGlobal, clut->Clut, w, h, clut->VramClut, clut->ClutPSM, 1, GS_CLUT_PALLETE);
-    return 1;
-}
-
-static int rmUploadTexture(GSTEXTURE *txt)
-{
-    // For clut based textures...
-    if (txt->Clut) {
-        // upload CLUT first
-        if (!rmUploadClut((GSCLUT *)txt->Clut))
-            return 0;
-
-        // copy the new VramClut
-        txt->VramClut = ((GSCLUT *)txt->Clut)->VramClut;
-    }
-
-    u32 size = gsKit_texture_size(txt->Width, txt->Height, txt->PSM);
-    // alignment of the allocation
-    size = (-GS_VRAM_BLOCKSIZE_256) & (size + GS_VRAM_BLOCKSIZE_256 - 1);
-
-    // too large to fit VRAM with the currently allocated space?
-    if (gsGlobal->CurrentPointer + size >= __VRAM_SIZE) {
-        if (size >= __VRAM_SIZE) {
-            // Only log this if the allocation is too large itself
-            LOG("RENDERMAN Requested texture allocation is bigger than VRAM!\n");
-            // We won't allocate this, it's too large
-            txt->Vram = GSKIT_ALLOC_ERROR;
-            return 0;
-        }
-
-        rmFlush();
-
-        // Should not flush CLUT away. If this happenned we have to reupload
-        if (txt->Clut) {
-            if (!rmUploadClut((GSCLUT *)txt->Clut))
-                return 0;
-
-            txt->VramClut = ((GSCLUT *)txt->Clut)->VramClut;
-        }
-
-        // only could fit CLUT but not the pixmap with it!
-        if (gsGlobal->CurrentPointer + size >= __VRAM_SIZE)
-            return 0;
-    }
-
-    txt->Vram = gsGlobal->CurrentPointer;
-    gsGlobal->CurrentPointer += size;
-
-    rmAppendUploadedTextures(txt);
-
-    // We can't do gsKit_texture_upload since it'd assume txt->Clut is the CLUT table directly
-    // whereas we're using it as a pointer to our structure containg clut data
-    gsKit_setup_tbw(txt);
-    SyncDCache(txt->Mem, (u8 *)(txt->Mem) + size);
-    gsKit_texture_send_inline(gsGlobal, txt->Mem, txt->Width, txt->Height, txt->Vram, txt->PSM, txt->TBW, txt->Clut ? GS_CLUT_TEXTURE : GS_CLUT_NONE);
-
-    return 1;
-}
-
-int rmPrepareTexture(GSTEXTURE *txt)
-{
-    //Upload, only if not already uploaded.
-    return ((txt->Vram && txt->Vram != GSKIT_ALLOC_ERROR) ? 1 : rmUploadTexture(txt));
-}
-
-void rmDispatch(void)
-{
-    gsKit_queue_exec(gsGlobal);
-}
-
-void rmFlush(void)
-{
-    rmDispatch();
-
-    // release all the uploaded textures
-    gsKit_vram_clear(gsGlobal);
-
-    while (uploadedTextures) {
-        // free clut and txt if those are filled in
-        if (uploadedTextures->txt) {
-            uploadedTextures->txt->Vram = 0;
-            uploadedTextures->txt->VramClut = 0;
-        }
-
-        if (uploadedTextures->clut)
-            uploadedTextures->clut->VramClut = 0;
-
-        struct rm_texture_list_t *entry = uploadedTextures;
-        uploadedTextures = uploadedTextures->next;
-        free(entry);
-    }
+    gsKit_TexManager_free(gsGlobal, txt);
 }
 
 void rmStartFrame(void)
 {
+    if (hires == 0)
+        gsKit_clear(gsGlobal, gColBlack);
+
     order = 0;
 }
 
 void rmEndFrame(void)
 {
-    gsKit_set_finish(gsGlobal);
+    if (hires) {
+        gsKit_hires_sync(gsGlobal);
+        gsKit_hires_flip(gsGlobal);
+    }
+    else {
+        gsKit_set_finish(gsGlobal);
+        gsKit_queue_exec(gsGlobal);
 
-    rmFlush();
+        // Wait for draw ops to finish
+        gsKit_finish();
 
-    // Wait for draw ops to finish
-    gsKit_finish();
+        if (!gsGlobal->FirstFrame) {
+            SleepThread();
+            guiWakeupCount = 0;
 
-    if (!gsGlobal->FirstFrame) {
-        SleepThread();
+            if (gsGlobal->DoubleBuffering == GS_SETTING_ON) {
+                GS_SET_DISPFB2(gsGlobal->ScreenBuffer[gsGlobal->ActiveBuffer & 1] / 8192,
+                               gsGlobal->Width / 64, gsGlobal->PSM, 0, 0);
 
-        if (gsGlobal->DoubleBuffering == GS_SETTING_ON) {
-            GS_SET_DISPFB2(gsGlobal->ScreenBuffer[gsGlobal->ActiveBuffer & 1] / 8192,
-                           gsGlobal->Width / 64, gsGlobal->PSM, 0, 0);
-
-            gsGlobal->ActiveBuffer ^= 1;
-            gsGlobal->PrimContext ^= 1;
+                gsGlobal->ActiveBuffer ^= 1;
+            }
         }
+
+        gsKit_setactive(gsGlobal);
     }
 
-    gsKit_setactive(gsGlobal);
+    gsKit_TexManager_nextFrame(gsGlobal);
 }
 
 static int rmOnVSync(void)
 {
-    iWakeupThread(guiThreadID);
+    if (guiWakeupCount == 0)
+    {
+        guiWakeupCount = 1;
+        iWakeupThread(guiThreadID);
+    }
 
+    ExitHandler();
     return 0;
 }
 
 void rmInit()
 {
-    gsGlobal = gsKit_init_global();
+    short int mode = gsKit_check_rom();
 
-    rm_mode_table[RM_VMODE_AUTO].mode = gsGlobal->Mode;
-    rm_mode_table[RM_VMODE_AUTO].height = gsGlobal->Height;
+    rm_mode_table[RM_VMODE_AUTO].mode = mode;
+    rm_mode_table[RM_VMODE_AUTO].height = (mode == GS_MODE_PAL) ? 512 : 448;
 
     dmaKit_init(D_CTRL_RELE_OFF, D_CTRL_MFD_OFF, D_CTRL_STS_UNSPEC,
                 D_CTRL_STD_OFF, D_CTRL_RCYC_8, 1 << DMA_CHANNEL_GIF);
@@ -308,17 +164,8 @@ void rmInit()
 
     order = 0;
 
-    aspectWidth = 1.0f;
-    aspectHeight = 1.0f;
-
-    shiftYVal = 1.0f;
-    shiftY = &shiftYFunc;
-
-    transX = 0.0f;
-    transY = 0.0f;
-
+    guiWakeupCount = 0;
     guiThreadID = GetThreadId();
-    gsKit_add_vsync_handler(&rmOnVSync);
 }
 
 int rmSetMode(int force)
@@ -329,131 +176,145 @@ int rmSetMode(int force)
     // we don't want to set the vmode without a reason...
     int changed = (vmode != gVMode || force);
     if (changed) {
+        // Cleanup previous gsKit instance
+        if (vmode >= 0)
+            rmEnd();
+
         vmode = gVMode;
+        hires = (rm_mode_table[vmode].passes > 1) ? 1 : 0;
 
-        gsGlobal->Mode = rm_mode_table[vmode].mode;
-        gsGlobal->Height = rm_mode_table[vmode].height;
-
-        if (vmode == RM_VMODE_DTV480P || vmode == RM_VMODE_DTV576P || vmode == RM_VMODE_VGA_640_60) {
-            gsGlobal->Interlace = GS_NONINTERLACED;
-            gsGlobal->Field = GS_FRAME;
-        } else {
-            gsGlobal->Interlace = GS_INTERLACED;
-            gsGlobal->Field = GS_FIELD;
+        if (hires) {
+            gsGlobal = gsKit_hires_init_global();
         }
-        gsGlobal->Width = 640;
-
+        else {
+            gsGlobal = gsKit_init_global();
+            vsync_id = gsKit_add_vsync_handler(&rmOnVSync);
+        }
+        gsGlobal->Mode = rm_mode_table[vmode].mode;
+        gsGlobal->Width = rm_mode_table[vmode].width;
+        gsGlobal->Height = rm_mode_table[vmode].height;
+        gsGlobal->Interlace = rm_mode_table[vmode].interlace;
+        gsGlobal->Field = rm_mode_table[vmode].field;
         gsGlobal->PSM = GS_PSM_CT24;
+        // Higher resolution use too much VRAM
+        // so automatically switch back to 16bit color depth
+        if ((gsGlobal->Width * gsGlobal->Height) > (704 * 576))
+            gsGlobal->PSM = GS_PSM_CT16S;
         gsGlobal->PSMZ = GS_PSMZ_16S;
         gsGlobal->ZBuffering = GS_SETTING_OFF;
         gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
         gsGlobal->DoubleBuffering = GS_SETTING_ON;
+        gsGlobal->Dithering = GS_SETTING_ON;
 
-        if ((gsGlobal->Mode) == GS_MODE_DTV_576P) { // Write X, Y, DW and DH positions for DTV576P (not covered by GSKit lib)
-            gsGlobal->StartX = 324;
-            gsGlobal->StartY = 72;
-            gsGlobal->DW = 1280;
-            gsGlobal->DH = 512;
+        // Do not draw pixels if they are fully transparent
+        //gsGlobal->Test->ATE  = GS_SETTING_ON;
+        gsGlobal->Test->ATST = 7; // NOTEQUAL to AREF passes
+        gsGlobal->Test->AREF = 0x00;
+        gsGlobal->Test->AFAIL = 0; // KEEP
+
+        if ((gsGlobal->Interlace == GS_INTERLACED) && (gsGlobal->Field == GS_FRAME))
+            gsGlobal->Height /= 2;
+
+        // Coordinate space ranges from 0 to 4096 pixels
+        // Center the buffer in the coordinate space
+        gsGlobal->OffsetX = ((4096 - gsGlobal->Width)  / 2) * 16;
+        gsGlobal->OffsetY = ((4096 - gsGlobal->Height) / 2) * 16;
+
+        if (hires) {
+            gsKit_hires_init_screen(gsGlobal, rm_mode_table[vmode].passes);
         }
-
-        gsKit_init_screen(gsGlobal);
-
-        if (vmode == RM_VMODE_DTV480P) { // Overwrite X, Y and DW GSKit params for DTV480P
-            gsGlobal->StartX = 312;
-            gsGlobal->StartY = 37 + (480 - 448) / 2;
-            gsGlobal->DW = 1280;
-            gsGlobal->DH = 448;
-        } else if (vmode == RM_VMODE_VGA_640_60) { // Overwrite X, Y GSKit params for VGA_640_60
-            gsGlobal->StartX = 276;
-            gsGlobal->StartY = 42;
+        else {
+            gsKit_init_screen(gsGlobal);
+            gsKit_mode_switch(gsGlobal, GS_ONESHOT);
         }
-
-        if ((vmode == RM_VMODE_DTV480P) || (vmode == RM_VMODE_VGA_640_60)) { // Commit settings for DTV480P and VGA_650_60
-            DIntr();                                                         // disable interrupts
-            GS_SET_DISPLAY1(gsGlobal->StartX,                                // X position in the display area (in VCK unit
-                            gsGlobal->StartY,                                // Y position in the display area (in Raster u
-                            gsGlobal->MagH,                                  // Horizontal Magnification
-                            gsGlobal->MagV,                                  // Vertical Magnification
-                            gsGlobal->DW - 1,                                // Display area width
-                            gsGlobal->DH - 1);                               // Display area height
-            GS_SET_DISPLAY2(gsGlobal->StartX,                                // X position in the display area (in VCK units)
-                            gsGlobal->StartY,                                // Y position in the display area (in Raster units)
-                            gsGlobal->MagH,                                  // Horizontal Magnification
-                            gsGlobal->MagV,                                  // Vertical Magnification
-                            gsGlobal->DW - 1,                                // Display area width
-                            gsGlobal->DH - 1);                               // Display area height
-            __asm__("sync.l; sync.p;");
-            EIntr(); // enable interrupts
-        }
-
-        gsKit_mode_switch(gsGlobal, GS_ONESHOT);
 
         gsKit_set_test(gsGlobal, GS_ZTEST_OFF);
+        gsKit_set_primalpha(gsGlobal, gDefaultAlpha, 0);
 
         // reset the contents of the screen to avoid garbage being displayed
-        gsKit_clear(gsGlobal, gColBlack);
-        gsKit_sync_flip(gsGlobal);
+        if (hires) {
+            gsKit_hires_sync(gsGlobal);
+            gsKit_hires_flip(gsGlobal);
+        }
+        else {
+            gsKit_clear(gsGlobal, gColBlack);
+            gsKit_sync_flip(gsGlobal);
+        }
 
         LOG("RENDERMAN New vmode: %d, %d x %d\n", vmode, gsGlobal->Width, gsGlobal->Height);
     }
+
+    rmSetDisplayOffset(gXOff, gYOff);
+    rmSetOverscan(gOverscan);
+    rmSetAspectRatio((gWideScreen == 0) ? RM_ARATIO_4_3 : RM_ARATIO_16_9);
+
     return changed;
+}
+
+void rmGetScreenExtentsNative(int *w, int *h)
+{
+    *w = iDisplayWidth;
+    *h = iDisplayHeight;
 }
 
 void rmGetScreenExtents(int *w, int *h)
 {
-    *w = gsGlobal->Width;
-    *h = gsGlobal->Height;
+    // Emulate 640x480 (square pixel VGA)
+    *w = 640;
+    *h = 480;
 }
 
 void rmEnd(void)
 {
-    rmFlush();
-}
-
-/** If txt is null, don't use DIM_UNDEF size */
-void rmSetupQuad(GSTEXTURE *txt, int x, int y, short aligned, int w, int h, short scaled, u64 color, rm_quad_t *q)
-{
-    if (aligned) {
-        float dim;
-        if (w == DIM_UNDEF)
-            w = txt->Width;
-        if (h == DIM_UNDEF)
-            h = txt->Height;
-
-        if (scaled)
-            dim = aspectWidth * (w >> 1);
-        else
-            dim = w >> 1;
-        q->ul.x = x - dim;
-        q->br.x = x + dim;
-
-        if (scaled)
-            dim = aspectHeight * (h >> 1);
-        else
-            dim = h >> 1;
-        q->ul.y = shiftY(y) - dim;
-        q->br.y = shiftY(y) + dim;
-    } else {
-        if (w == DIM_UNDEF)
-            w = txt->Width;
-        if (h == DIM_UNDEF)
-            h = txt->Height;
-
-        q->ul.x = x;
-        if (scaled)
-            q->br.x = x + aspectWidth * w;
-        else
-            q->br.x = x + w;
-
-        q->ul.y = shiftY(y);
-        if (scaled)
-            q->br.y = shiftY(y) + aspectHeight * h;
-        else
-            q->br.y = shiftY(y) + h;
+    if (hires) {
+        gsKit_hires_deinit_global(gsGlobal);
+    }
+    else {
+        gsKit_deinit_global(gsGlobal);
+        gsKit_remove_vsync_handler(vsync_id);
     }
 
-    q->color = color;
+    vmode = -1;
+}
 
+#define X_SCALE(x) (((x)*iDisplayWidth) /640)
+#define Y_SCALE(y) (((y)*iDisplayHeight)/480)
+/** If txt is null, don't use DIM_UNDEF size */
+static void rmSetupQuad(GSTEXTURE *txt, int x, int y, short aligned, int w, int h, short scaled, u64 color, rm_quad_t *q)
+{
+    if (w == DIM_UNDEF)
+        w = txt->Width;
+    if (h == DIM_UNDEF)
+        h = txt->Height;
+
+    // Legacy scaling
+    x = X_SCALE(x);
+    y = Y_SCALE(y);
+    if (scaled & SCALING_RATIO)
+        w = X_SCALE(w * iAspectWidth) >> 2;
+    else
+        w = X_SCALE(w);
+    h = Y_SCALE(h);
+
+    // Align LEFT/HCENTER/RIGHT
+    if (aligned & ALIGN_HCENTER)
+        q->ul.x = x - (w >> 1);
+    else if (aligned & ALIGN_RIGHT)
+        q->ul.x = x - w;
+    else
+        q->ul.x = x;
+    q->br.x = q->ul.x + w;
+
+    // Align TOP/VCENTER/BOTTOM
+    if (aligned & ALIGN_VCENTER)
+        q->ul.y = y - (h >> 1);
+    else if (aligned & ALIGN_BOTTOM)
+        q->ul.y = y - h;
+    else
+        q->ul.y = y;
+    q->br.y = q->ul.y + h;
+
+    q->color = color;
     if (txt) {
         q->txt = txt;
         q->ul.u = 0;
@@ -464,22 +325,23 @@ void rmSetupQuad(GSTEXTURE *txt, int x, int y, short aligned, int w, int h, shor
 }
 
 void rmDrawQuad(rm_quad_t *q)
-{                                  // NO scaling, NO shift, NO alignment
-    if (!rmPrepareTexture(q->txt)) // won't render if not ready!
-        return;
-
+{
     if ((q->txt->PSM == GS_PSM_CT32) || (q->txt->Clut && q->txt->ClutPSM == GS_PSM_CT32)) {
-        gsKit_set_primalpha(gsGlobal, gDefaultAlpha, 0);
+        gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
+        gsKit_set_test(gsGlobal, GS_ATEST_ON);
+    }
+    else {
+        gsGlobal->PrimAlphaEnable = GS_SETTING_OFF;
+        gsKit_set_test(gsGlobal, GS_ATEST_OFF);
     }
 
+    gsKit_TexManager_bind(gsGlobal, q->txt);
     gsKit_prim_sprite_texture(gsGlobal, q->txt,
-                              q->ul.x + transX, q->ul.y + transY,
-                              q->ul.u + 0.5f, q->ul.v + 0.5f,
-                              q->br.x + transX, q->br.y + transY,
-                              q->br.u - 0.375f, q->br.v + 0.375f, order, q->color);
+                              q->ul.x + fRenderXOff, q->ul.y + fRenderYOff,
+                              q->ul.u, q->ul.v,
+                              q->br.x + fRenderXOff, q->br.y + fRenderYOff,
+                              q->br.u, q->br.v, order, q->color);
     order++;
-
-    gsKit_set_primalpha(gsGlobal, GS_BLEND_BACK2FRONT, 0);
 }
 
 void rmDrawPixmap(GSTEXTURE *txt, int x, int y, short aligned, int w, int h, short scaled, u64 color)
@@ -492,83 +354,153 @@ void rmDrawPixmap(GSTEXTURE *txt, int x, int y, short aligned, int w, int h, sho
 void rmDrawOverlayPixmap(GSTEXTURE *overlay, int x, int y, short aligned, int w, int h, short scaled, u64 color,
                          GSTEXTURE *inlay, int ulx, int uly, int urx, int ury, int blx, int bly, int brx, int bry)
 {
-
     rm_quad_t quad;
     rmSetupQuad(overlay, x, y, aligned, w, h, scaled, color, &quad);
+    ulx = X_SCALE(ulx * iAspectWidth) >> 2;
+    urx = X_SCALE(urx * iAspectWidth) >> 2;
+    blx = X_SCALE(blx * iAspectWidth) >> 2;
+    brx = X_SCALE(brx * iAspectWidth) >> 2;
+    uly = Y_SCALE(uly);
+    ury = Y_SCALE(ury);
+    bly = Y_SCALE(bly);
+    bry = Y_SCALE(bry);
 
-    if (!rmPrepareTexture(inlay))
-        return;
+    if ((inlay->PSM == GS_PSM_CT32) || (inlay->Clut && inlay->ClutPSM == GS_PSM_CT32))
+        gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
+    else
+        gsGlobal->PrimAlphaEnable = GS_SETTING_OFF;
 
-    if (inlay->PSM == GS_PSM_CT32)
-        gsKit_set_primalpha(gsGlobal, gDefaultAlpha, 0);
-
-    gsKit_prim_quad_texture(gsGlobal, inlay, quad.ul.x + transX + aspectWidth * ulx, quad.ul.y + transY + uly, 0.5f, 0.5f,
-                            quad.ul.x + transX + aspectWidth * urx, quad.ul.y + transY + ury, inlay->Width - 0.375f, 0.5f,
-                            quad.ul.x + transX + aspectWidth * blx, quad.ul.y + transY + bly, 0.5f, inlay->Height - 0.375f,
-                            quad.ul.x + transX + aspectWidth * brx, quad.ul.y + transY + bry, inlay->Width - 0.375f, inlay->Height - 0.375f, order, gDefaultCol);
+    gsKit_TexManager_bind(gsGlobal, inlay);
+    gsKit_prim_quad_texture(gsGlobal, inlay,
+                            quad.ul.x + ulx + fRenderXOff, quad.ul.y + uly + fRenderYOff,
+                            0.0f, 0.0f,
+                            quad.ul.x + urx + fRenderXOff, quad.ul.y + ury + fRenderYOff,
+                            inlay->Width, 0.0f,
+                            quad.ul.x + blx + fRenderXOff, quad.ul.y + bly + fRenderYOff,
+                            0.0f, inlay->Height,
+                            quad.ul.x + brx + fRenderXOff, quad.ul.y + bry + fRenderYOff,
+                            inlay->Width, inlay->Height, order, gDefaultCol);
     order++;
-    gsKit_set_primalpha(gsGlobal, GS_BLEND_BACK2FRONT, 0);
 
     rmDrawQuad(&quad);
 }
 
 void rmDrawRect(int x, int y, int w, int h, u64 color)
 {
-    gsKit_set_primalpha(gsGlobal, GS_SETREG_ALPHA(0, 1, 0, 1, 0), 0);
-    gsKit_prim_quad(gsGlobal, x + transX, shiftY(y) + transY, x + w + transX, shiftY(y) + transY, x + transX, shiftY(y) + h + transY, x + w + transX, shiftY(y) + h + transY, order, color);
+    float fx = X_SCALE(x) + fRenderXOff;
+    float fy = Y_SCALE(y) + fRenderYOff;
+    float fw = X_SCALE(w);
+    float fh = Y_SCALE(h);
+
+    gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
+    gsKit_prim_sprite(gsGlobal, fx, fy, fx + fw, fy + fh, order, color);
     order++;
-    gsKit_set_primalpha(gsGlobal, GS_BLEND_BACK2FRONT, 0);
 }
 
-void rmDrawLine(int x, int y, int x1, int y1, u64 color)
+void rmDrawLine(int x1, int y1, int x2, int y2, u64 color)
 {
-    gsKit_prim_line(gsGlobal, x + transX, shiftY(y) + transY, x1 + transX, shiftY(y1) + transY, order, color);
+    float fx1 = X_SCALE(x1) + fRenderXOff;
+    float fy1 = Y_SCALE(y1) + fRenderYOff;
+    float fx2 = X_SCALE(x2) + fRenderXOff;
+    float fy2 = Y_SCALE(y2) + fRenderYOff;
+
+    gsGlobal->PrimAlphaEnable = GS_SETTING_ON;
+    gsKit_prim_line(gsGlobal, fx1, fy1, fx2, fy2, order, color);
+    order++;
 }
 
-void rmSetAspectRatio(float width, float height)
+void rmSetDisplayOffset(int x, int y)
 {
-    aspectWidth = width;
-    aspectHeight = height;
+    gsKit_set_display_offset(gsGlobal, x * rm_mode_table[vmode].VCK, y);
 }
 
-void rmResetAspectRatio()
+void rmSetAspectRatio(enum rm_aratio dar)
 {
-    aspectWidth = 1.0f;
-    aspectHeight = 1.0f;
+    DAR = dar;
+
+    switch(DAR) {
+        case RM_ARATIO_4_3:
+            iAspectWidth = 4; // width = width * 4 / 4
+            break;
+        case RM_ARATIO_16_9:
+            iAspectWidth = 3; // width = width * 3 / 4
+            break;
+    };
 }
 
-void rmGetAspectRatio(float *w, float *h)
+int rmWideScale(int x)
 {
-    *w = aspectWidth;
-    *h = aspectHeight;
+    return (x * iAspectWidth) >> 2;
 }
 
-void rmApplyAspectRatio(int *w, int *h)
+// Get the pixel aspect ratio (how wide or narrow are the pixels?)
+float rmGetPAR()
 {
-    *w = *w * aspectWidth;
-    *h = *h * aspectHeight;
+    float fPAR = (float)rm_mode_table[vmode].PAR1 / (float)rm_mode_table[vmode].PAR2;
+
+    // In anamorphic mode the pixels are stretched to 16:9
+    if ((DAR == RM_ARATIO_16_9) && (rm_mode_table[vmode].aratio == RM_ARATIO_4_3))
+        fPAR *= 0.75f;
+
+    // In interlaced frame mode, the pixel are (virtually) twice as high
+    if ((gsGlobal->Interlace == GS_INTERLACED) && (gsGlobal->Field == GS_FRAME))
+        fPAR *= 2.0f;
+
+    return fPAR;
 }
 
-void rmSetShiftRatio(float shiftYRatio)
+// Get interfaced frame mode
+int rmGetInterlacedFrameMode()
 {
-    shiftYVal = shiftYRatio;
-    shiftY = &shiftYFunc;
+    if ((gsGlobal->Interlace == GS_INTERLACED) && (gsGlobal->Field == GS_FRAME))
+        return 1;
+
+    return 0;
 }
 
-void rmResetShiftRatio()
+int rmScaleX(int x)
 {
-    shiftY = &identityFunc;
+    return X_SCALE(x);
 }
 
-void rmApplyShiftRatio(int *y)
+int rmScaleY(int y)
 {
-    *y = shiftY(*y);
+    return Y_SCALE(y);
+}
+
+int rmUnScaleX(int x)
+{
+    return (x*640)/iDisplayWidth;
+}
+
+int rmUnScaleY(int y)
+{
+    return (y*480)/iDisplayHeight;
+}
+
+static void rmUpdateRenderOffsets()
+{
+    fRenderXOff = (float)iDisplayXOff + transX - 0.5f;
+    fRenderYOff = (float)iDisplayYOff + transY - 0.5f;
+
+    if (rmGetInterlacedFrameMode() == 1)
+        fRenderYOff += 0.25f;
+}
+
+void rmSetOverscan(int overscan)
+{
+    iDisplayXOff = (gsGlobal->Width  * overscan) / (2 * 1000);
+    iDisplayYOff = (gsGlobal->Height * overscan) / (2 * 1000);
+    iDisplayWidth  = gsGlobal->Width  - (2 * iDisplayXOff);
+    iDisplayHeight = gsGlobal->Height - (2 * iDisplayYOff);
+    rmUpdateRenderOffsets();
 }
 
 void rmSetTransposition(float x, float y)
 {
-    transX = x;
-    transY = y;
+    transX = X_SCALE(x);
+    transY = Y_SCALE(y);
+    rmUpdateRenderOffsets();
 }
 
 unsigned char rmGetHsync(void)

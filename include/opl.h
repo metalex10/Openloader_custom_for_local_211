@@ -25,20 +25,28 @@
 #include <math.h>
 #include <osd_config.h>
 #include <libpwroff.h>
+#include <usbhdfsd-common.h>
 #include <fileXio_rpc.h>
 #include <smod.h>
 #include <smem.h>
 #include <debug.h>
 #include <ps2smb.h>
 #include "config.h"
-#ifdef VMC
 #include <sys/fcntl.h>
-#endif
 
 // Last Played Auto Start
 #include <time.h>
 
 #define OPL_IS_DEV_BUILD 1 //Define if this build is a development build.
+
+#ifdef OPL_IS_DEV_BUILD
+#define OPL_FOLDER "CFG-DEV"
+#else
+#define OPL_FOLDER "CFG"
+#endif
+
+//Master password for disabling the parental lock.
+#define OPL_PARENTAL_LOCK_MASTER_PASS	"989765"
 
 //IO type IDs
 #define IO_CUSTOM_SIMPLEACTION 1 // handler for parameter-less actions
@@ -53,6 +61,13 @@
 #define OPL_COMPAT_UPDATE_STAT_CONN_ERROR -2
 #define OPL_COMPAT_UPDATE_STAT_ABORTED -3
 
+#define OPL_VMODE_CHANGE_CONFIRMATION_TIMEOUT_MS 10000
+
+int oplPath2Mode(const char *path);
+int oplGetAppImage(const char *device, char *folder, int isRelative, char *value, char *suffix, GSTEXTURE *resultTex, short psm);
+int oplScanApps(int (*callback)(const char *path, config_set_t *appConfig, void *arg), void *arg);
+int oplShouldAppsUpdate(void);
+
 void setErrorMessage(int strId);
 void setErrorMessageWithCode(int strId, int error);
 int loadConfig(int types);
@@ -61,7 +76,7 @@ void applyConfig(int themeID, int langID);
 void menuDeferredUpdate(void *data);
 void moduleUpdateMenu(int mode, int themeChanged);
 void handleHdlSrv();
-void deinit();
+void deinit(int exception, int modeSelected);
 
 char *gBaseMCDir;
 
@@ -107,10 +122,29 @@ int gUseInfoScreen;
 int gEnableArt;
 int gWideScreen;
 int gVMode; // 0 - Auto, 1 - PAL, 2 - NTSC
+int gXOff;
+int gYOff;
+int gOverscan;
 int gSelectButton;
+int gHDDGameListCache;
+
+int gEnableSFX;
+int gEnableBootSND;
+int gSFXVolume;
+int gBootSndVolume;
+
+int gFadeDelay;
+int toggleSfx;
 
 #ifdef IGS
 #define IGS_VERSION "0.1"
+#endif
+
+// ------------------------------------------------------------------------------------------------------------------------
+
+#ifdef PADEMU
+int gEnablePadEmu;
+int gPadEmuSettings;
 #endif
 
 // ------------------------------------------------------------------------------------------------------------------------
@@ -140,8 +174,7 @@ int gRememberLastPlayed;
 int KeyPressedOnce;
 int gAutoStartLastPlayed;
 int RemainSecs, DisableCron;
-double CronStart, CronCurrent;
-char strAutoStartInNSecs[21];
+double CronStart;
 
 unsigned char gDefaultBgColor[3];
 unsigned char gDefaultTextColor[3];
@@ -151,7 +184,7 @@ unsigned char gDefaultUITextColor[3];
 #define MENU_ITEM_HEIGHT 19
 
 // BLURT output
-char blurttext[128];
+//char blurttext[128];
 //#define BLURT	snprintf(blurttext, sizeof(blurttext), "%s\\%s(%d)", __FILE__ , __func__ , __LINE__ );delay(10);
-#define BLURT snprintf(blurttext, sizeof(blurttext), "%s(%d)", blurttext, __LINE__);
+//#define BLURT snprintf(blurttext, sizeof(blurttext), "%s(%d)", blurttext, __LINE__);
 #endif

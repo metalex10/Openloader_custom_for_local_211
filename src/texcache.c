@@ -3,6 +3,7 @@
 #include "include/ioman.h"
 #include "include/gui.h"
 #include "include/util.h"
+#include "include/renderman.h"
 
 typedef struct
 {
@@ -37,6 +38,8 @@ static void cacheLoadImage(void *data)
         free(texture->Mem);
         texture->Mem = NULL;
         texture->ClutPSM = 0;
+        if (texture->Clut != NULL)
+            free(texture->Clut);
         texture->Clut = NULL;
         texture->Vram = 0;
         texture->VramClut = 0;
@@ -64,13 +67,17 @@ void cacheEnd()
 
 static void cacheClearItem(cache_entry_t *item, int freeTxt)
 {
-    if (freeTxt && item->texture.Mem)
+    if (freeTxt && item->texture.Mem) {
+        rmUnloadTexture(&item->texture);
         free(item->texture.Mem);
+        if (item->texture.Clut)
+            free(item->texture.Clut);
+    }
 
     memset(item, 0, sizeof(cache_entry_t));
     item->texture.Mem = NULL;
     item->texture.Vram = 0;
-    item->texture.Clut = 0;
+    item->texture.Clut = NULL;
     item->texture.VramClut = 0;
     item->qr = NULL;
     item->lastUsed = -1;

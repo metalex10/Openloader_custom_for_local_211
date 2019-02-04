@@ -232,6 +232,7 @@ int ioPutRequest(int type, void *data)
 
     SignalSema(gEndSemaId);
 
+    // Worker thread cannot wake itself up (WakeupThread will return an error), but it will find the new request before sleeping.
     WakeupThread(gIOThreadId);
     return IO_OK;
 }

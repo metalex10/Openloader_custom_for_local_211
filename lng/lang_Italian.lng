@@ -1,5 +1,5 @@
 # Italian translation by jauffreblades - @http://psx-scene.com/forums/members/jauffreblades/
-# For Open PS2 Loader 0.9.3 betas - Official OPL Beta thread @http://psx-scene.com/forums/f150/open-ps2-loader-official-beta-revisions-releases-156209/
+# For Open PS2 Loader 0.9.3+ betas - Official OPL Beta thread @http://psx-scene.com/forums/f150/open-ps2-loader-official-beta-revisions-releases-156209/
 Italian
 Open PS2 Loader %s
 Salva modifiche
@@ -111,7 +111,7 @@ Lasciare vuoto per autenticazione GUEST
 Lettura accurata
 Modo sincrono
 Unhook dalle syscalls
-Skip Video
+Salta i video
 Disabilita DVD-DL
 Disabilita IGR
 Moduli nell'area alta di memoria
@@ -131,7 +131,7 @@ Progresso
 File VMC esiste.
 File VMC non valido, dimensione non corretta.
 Creazione file VMC richiesta.
-Errore VMC %s, continuare con MC fisica (slot %d)?
+Error accessing VMC %s. Continue with the Memory Card in slot %d?
 Aggiornamento automatico
 Informazioni su
 Sviluppatori
@@ -182,6 +182,8 @@ H-POS
 Regolazione orizzontale
 V-POS
 Regolazione verticale
+Overscan
+Overscan Adjustment
 Salta FMV
 Salta video in full motion
 Impostazioni cheat
@@ -208,3 +210,50 @@ Avvio automatico
 Valore in secondi, 0 per disabilitare l'avvio automatico
 Logo PS2
 Mostrato soltanto con un logo del disco valido e compatibile con la regione della console
+Configure PADEMU
+Pad Emulator Settings
+Enable PadEmulator
+Turns on/off PadEmulator for selected game.
+Pad Emulator mode
+Select Pad Emulator mode.
+DualShock3/4 USB
+DualShock3/4 BT
+Settings for port:
+Select Pad Emulator port for settings.
+Enable emulation
+Turns on/off Pad Emulator for selected port.
+Enable vibration
+Turns on/off vibration for Pad Emulator selected port.
+Usb bluetooth adapter mac address:
+DS Controller paired to mac address:
+Pair
+Pair DS controller
+Pair DS controller with bluetooth adapter mac address.
+Not connected
+Bluetooth adapter information
+Shows more information and supported features
+HCI Version:
+LMP Version:
+Manufacturer ID:
+Support features:
+Yes
+No
+Bluetooth adapter should be fully compatible with DS3/DS4 controllers.
+Bluetooth adapter may not work correctly with DS3/DS4 controllers.
+Enable Multitap emulation
+Turns on/off Multitap emulation for selected game.
+Multitap emulator on port
+Select port for Multitap emulation.
+Disable workaround for fake ds3
+Some fake ds3s need workaround, this option will disable it.
+Emulate FIELD flipping
+Fix for games that glitch under progressive video modes.
+Parental Lock Settings
+Parental Lock Password
+Leave blank to disable the parental lock.
+Enter Parental Lock Password
+Parental lock password incorrect.
+Parental lock disabled.
+Build Options:
+Error - this password cannot be used.
+VMC %s file is fragmented. Continue with Memory Card in slot %d?

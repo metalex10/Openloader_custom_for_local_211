@@ -3,16 +3,32 @@
 
 #include <gsToolkit.h>
 
-/// DTV 576 Progressive Scan (720x576)
-#define GS_MODE_DTV_576P 0x53
+/*
+ * Rendering using renderman
+ *
+ * Resolution
+ *   The resolution has been standardized to 640x480. This is the only resolution
+ *   that was compatible with legacy themes and used square pixels. All other
+ *   resolutions are scaled by renderman.
+ *
+ * Widescreen (anamorphic)
+ *   Widescreen also uses the standard 640x480 resolution, but is scaled
+ *   horizontally. Use rmWideScale to scale any x/width value.
+ */
 
-/// DTV 1080 Progressive Scan (1920x1080)
-#define GS_MODE_DTV_1080P 0x54
+/// DTV 576 Progressive Scan (720x576). Not available in ROM v1.70 and earlier.
+#define GS_MODE_DTV_576P 0x53
 
 #define DIM_UNDEF -1
 
-#define ALIGN_NONE 0
-#define ALIGN_CENTER 1
+#define ALIGN_TOP     (0<<0)
+#define ALIGN_BOTTOM  (1<<0)
+#define ALIGN_VCENTER (2<<0)
+#define ALIGN_LEFT    (0<<2)
+#define ALIGN_RIGHT   (1<<2)
+#define ALIGN_HCENTER (2<<2)
+#define ALIGN_NONE    (ALIGN_TOP     | ALIGN_LEFT)
+#define ALIGN_CENTER  (ALIGN_VCENTER | ALIGN_HCENTER)
 
 #define SCALING_NONE 0
 #define SCALING_RATIO 1
@@ -48,13 +64,9 @@ const u64 gColFocus;
 const u64 gDefaultCol;
 const u64 gDefaultAlpha;
 
-enum rm_vmode {
-    RM_VMODE_AUTO = 0,
-    RM_VMODE_PAL,
-    RM_VMODE_NTSC,
-    RM_VMODE_DTV480P,
-    RM_VMODE_DTV576P,
-    RM_VMODE_VGA_640_60
+enum rm_aratio {
+    RM_ARATIO_4_3 = 0,
+    RM_ARATIO_16_9,
 };
 
 /** Initializes the rendering manager */
@@ -65,24 +77,20 @@ int rmSetMode(int force);
 
 void rmEnd(void);
 
-/** Fills the parameters with the screen width and height */
+/** Fills the parameters with the native screen width and height */
+void rmGetScreenExtentsNative(int *w, int *h);
+
+/** Fills the parameters with the virtual (640x480) screen width and height */
 void rmGetScreenExtents(int *w, int *h);
 
-/** Manually prepares a texture for rendering (should not be normally needed). 
-* txt->Vram will be nonzero on success.
-* @param txt The texture to upload (if not uploaded already)
-* @return 1 if ok, 0 if error uploading happened (likely too big texture) */
-int rmPrepareTexture(GSTEXTURE *txt);
+/** Invalidate a texture so it will be re-transferred to VRAM the next time.
+* @param txt The texture to invalidate */
+void rmInvalidateTexture(GSTEXTURE *txt);
 
-/** Flushes all rendering buffers - renders the gs queue, removes all textures from GS ram */
-void rmFlush(void);
-
-/** Issues immediate rendering of the accumulated operations */
-void rmDispatch(void);
+/** Unload texture from texture manager, performance optimization */
+void rmUnloadTexture(GSTEXTURE *txt);
 
 void rmDrawQuad(rm_quad_t *q);
-
-void rmSetupQuad(GSTEXTURE *txt, int x, int y, short aligned, int w, int h, short scaled, u64 color, rm_quad_t *q);
 
 /** Queues a specified pixmap (tinted with colour) to be rendered on specified position */
 void rmDrawPixmap(GSTEXTURE *txt, int x, int y, short aligned, int w, int h, short scaled, u64 color);
@@ -94,7 +102,7 @@ void rmDrawOverlayPixmap(GSTEXTURE *overlay, int x, int y, short aligned, int w,
 void rmDrawRect(int x, int y, int w, int h, u64 color);
 
 /** Queues a single color line to be rendered */
-void rmDrawLine(int x, int y, int x1, int y1, u64 color);
+void rmDrawLine(int x1, int y1, int x2, int y2, u64 color);
 
 /** Starts the frame - first to call every frame */
 void rmStartFrame(void);
@@ -102,23 +110,36 @@ void rmStartFrame(void);
 /** Ends the frame - last to call every frame */
 void rmEndFrame(void);
 
+/** Sets the display offset in units of pixels */
+void rmSetDisplayOffset(int x, int y);
+
+/** Set overscan in percentage/10 */
+void rmSetOverscan(int overscan);
+
 /** Sets the aspect ratio correction for the upcoming operations.
 * When set, it will treat all pixmap widths/heights (not positions) as scaled with the ratios provided */
-void rmSetAspectRatio(float width, float height);
+void rmSetAspectRatio(enum rm_aratio dar);
 
-/** Resets aspect ratio back to 1:1 */
-void rmResetAspectRatio();
+/** Widescreen scaling */
+int rmWideScale(int x);
 
-/** gets the current aspect ratio */
-void rmGetAspectRatio(float *w, float *h);
+/** Get Pixel Aspect Ratio of native resolution */
+float rmGetPAR();
 
-void rmApplyAspectRatio(int *w, int *h);
+/** Get interfaced frame mode */
+int rmGetInterlacedFrameMode();
 
-void rmSetShiftRatio(float height);
+/** Scale x from 640 to native resolution */
+int rmScaleX(int x);
 
-void rmResetShiftRatio();
+/** Scale y from 480 to native resolution */
+int rmScaleY(int y);
 
-void rmApplyShiftRatio(int *y);
+/** Scale x from native to 640 resolution */
+int rmUnScaleX(int x);
+
+/** Scale y from native to 480 resolution */
+int rmUnScaleY(int y);
 
 /** sets the transposition coordiantes (all content is transposed with these values) */
 void rmSetTransposition(float x, float y);

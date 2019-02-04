@@ -167,6 +167,7 @@ enum CDIOC_CODE {
 #define CDSC_IO_SEMA 0xFFFFFFF6          //Wait (param != 0) or signal (param == 0) high-level I/O semaphore.
 #define CDSC_GET_VERSION 0xFFFFFFF7      //Get CDVDMAN version.
 #define CDSC_SET_ERROR 0xFFFFFFFE        //Used by CDVDFSV and CDVDSTM to set the error code (Typically READCF*).
+#define CDSC_OPL_SHUTDOWN 0x00000001     //Shutdown OPL
 
 // exported functions prototypes
 #define cdvdman_IMPORTS_start DECLARE_IMPORT_TABLE(cdvdman, 1, 1)
@@ -262,8 +263,3 @@ int sceCdReadDvdDualInfo(int *on_dual, u32 *layer1_start); // #83
 #define I_sceCdReadDvdDualInfo DECLARE_IMPORT(83, sceCdReadDvdDualInfo)
 int sceCdLayerSearchFile(cdl_file_t *fp, const char *name, int layer); // #84
 #define I_sceCdLayerSearchFile DECLARE_IMPORT(84, sceCdLayerSearchFile)
-
-// By default CDVDMAN attempts to fix misaligned buffers as they happen, however with a considerable performance hit; hence it must be avoided at all costs.
-// Most game developers did avoid it happening, while some of them (Such as Konami with some of its games, like Gradius V) intentionally used misaligned buffers to make things like HDLoader malfunction.
-// This explains why there is no way for ETH/USB modes to be exact substitutes for the CD/DVD drive, without performance loss.
-#define UNALIGNED_BUFFER_PATCH 1
